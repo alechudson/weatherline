@@ -85,13 +85,13 @@ static Theme theme(void) {
   t.bg = GColorWhite;
   t.text = GColorBlack;
   t.muted = GColorDarkGray;
-  t.line = GColorCobaltBlue;
+  t.line = GColorBlack;
   t.grid = GColorLightGray;
-  t.warmer = GColorMelon;
-  t.colder = GColorBabyBlueEyes;
-  t.rain = GColorBlueMoon;
-  t.snow = GColorLightGray;
-  t.now = GColorOrange;
+  t.warmer = GColorRajah;
+  t.colder = GColorCadetBlue;
+  t.rain = GColorCobaltBlue;
+  t.snow = GColorDarkGray;
+  t.now = GColorBlack;
   t.sky_sun = GColorYellow;
   t.sky_part = GColorPastelYellow;
   t.sky_cloud = GColorLightGray;
@@ -103,11 +103,11 @@ static Theme theme(void) {
   t.muted = GColorLightGray;
   t.line = GColorWhite;
   t.grid = GColorDarkGray;
-  t.warmer = GColorRoseVale;
-  t.colder = GColorCobaltBlue;
-  t.rain = GColorVividCerulean;
+  t.warmer = GColorWindsorTan;
+  t.colder = GColorTiffanyBlue;
+  t.rain = GColorPictonBlue;
   t.snow = GColorWhite;
-  t.now = GColorSunsetOrange;
+  t.now = GColorWhite;
   t.sky_sun = GColorYellow;
   t.sky_part = GColorLimerick;
   t.sky_cloud = GColorLightGray;
@@ -375,14 +375,16 @@ static void draw_now(GContext *ctx, const Theme *t, time_t now) {
   int64_t span = (int64_t)s_face.window_end - (int64_t)s_face.window_start;
   int px = (int)(((now64 - (int64_t)s_face.window_start) * LAYOUT.plot.w) / span);
   int x = LAYOUT.plot.x + px;
-  fill_rect(ctx, x, LAYOUT.cloud.y, 2, LAYOUT.precip.y + LAYOUT.precip.h - LAYOUT.cloud.y, t->now);
+  int y0 = LAYOUT.cloud.y + LAYOUT.cloud.h;
+  int yy;
+  for (yy = y0; yy < LAYOUT.precip.y + LAYOUT.precip.h; yy += 2) fill_rect(ctx, x, yy, 1, 1, t->now);
   bool known;
   int y = LAYOUT.plot.y + row_at(px, false, &known);
   graphics_context_set_antialiased(ctx, true);
-  graphics_context_set_fill_color(ctx, t->bg);
-  graphics_fill_circle(ctx, GPoint(x, y), 5);
   graphics_context_set_fill_color(ctx, t->now);
-  graphics_fill_circle(ctx, GPoint(x, y), 3);
+  graphics_fill_circle(ctx, GPoint(x, y), 5);
+  graphics_context_set_fill_color(ctx, t->bg);
+  graphics_fill_circle(ctx, GPoint(x, y), 2);
 }
 
 static void draw_day_labels(GContext *ctx, const Theme *t) {
