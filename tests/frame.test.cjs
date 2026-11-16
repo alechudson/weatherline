@@ -124,3 +124,17 @@ test('an unknown platform is null and column widths stay at least 1', function()
     }
   });
 });
+
+test('the light theme sets a flag beside the unit without changing it', function() {
+  var light = frame.unpackFrame(frame.buildFrame(
+    fixtureForecast('Hill'),
+    {days: 2, unit: 'C', refreshMin: 60, theme: 'light'},
+    'emery',
+    NOW
+  ));
+  assert.equal(light.theme, 'light');
+  assert.equal(light.unit, 'C');
+  var dark = frame.unpackFrame(frame.buildFrame(fixtureForecast('Hill'), settings(2, 'F'), 'emery', NOW));
+  assert.equal(dark.theme, 'dark');
+  assert.equal(dark.unit, 'F');
+});

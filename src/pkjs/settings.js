@@ -1,7 +1,7 @@
 var SETTINGS_KEY = 'weatherline.settings';
 
 function defaults() {
-  return {days: 2, unit: 'F', refreshMin: 60};
+  return {days: 2, unit: 'F', refreshMin: 60, theme: 'dark'};
 }
 
 function normalize(raw) {
@@ -9,6 +9,7 @@ function normalize(raw) {
   if (!raw || typeof raw !== 'object') return out;
   if (raw.days === 1 || raw.days === 2 || raw.days === 3 || raw.days === 5) out.days = raw.days;
   if (raw.unit === 'F' || raw.unit === 'C') out.unit = raw.unit;
+  if (raw.theme === 'dark' || raw.theme === 'light') out.theme = raw.theme;
   if (raw.refreshMin === 30 || raw.refreshMin === 45 || raw.refreshMin === 60) {
     out.refreshMin = raw.refreshMin;
   }
@@ -91,6 +92,10 @@ function configPage(settings) {
       {value: 45, label: '45 min'},
       {value: 60, label: '1 hour'}
     ], s.refreshMin)
+    + group('Theme', 'Light is easy to read in sunlight.', 'theme', [
+      {value: 'dark', label: 'Dark'},
+      {value: 'light', label: 'Light'}
+    ], s.theme)
     + '<button type="button" id="save">Save</button></form>'
     + '<p class="credit">Weather data by Open-Meteo.com (CC BY 4.0). '
     + 'Place names by BigDataCloud.</p><script>'
@@ -98,7 +103,8 @@ function configPage(settings) {
     + 'var days=Number(document.querySelector("input[name=days]:checked").value);'
     + 'var unit=document.querySelector("input[name=unit]:checked").value;'
     + 'var refreshMin=Number(document.querySelector("input[name=refreshMin]:checked").value);'
-    + 'var payload={days:days,unit:unit,refreshMin:refreshMin};'
+    + 'var theme=document.querySelector("input[name=theme]:checked").value;'
+    + 'var payload={days:days,unit:unit,refreshMin:refreshMin,theme:theme};'
     + 'location.href="pebblejs://close#"+encodeURIComponent(JSON.stringify(payload));'
     + '});</script></body></html>';
   return 'data:text/html;charset=utf-8,' + encodeURIComponent(html);

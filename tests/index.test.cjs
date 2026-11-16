@@ -146,11 +146,12 @@ test('saving settings mid-fetch keeps the fetch and redraws with the new unit', 
   await settle();
   var xhr = app.requests[0];
   app.listeners.webviewclosed({
-    response: encodeURIComponent(JSON.stringify({days: 2, unit: 'C', refreshMin: 30}))
+    response: encodeURIComponent(JSON.stringify({days: 2, unit: 'C', refreshMin: 30, theme: 'light'}))
   });
   xhr.status = 200;
   xhr.responseText = forecastBody();
   xhr.onload();
   assert.equal(app.sent.length, 1, 'the fetch result still reached the watch');
-  assert.equal(app.sent[0][10000][2], 2, 'and it is in Celsius');
+  assert.equal(app.sent[0][10000][2] & 15, 2, 'and it is in Celsius');
+  assert.ok(app.sent[0][10000][2] & 0x10, 'with the light theme');
 });

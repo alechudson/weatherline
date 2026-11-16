@@ -14,8 +14,6 @@ The chart is a temperature line with a ring marking now. The area between the li
 
 The bottom row shows today's steps and the battery. A red Bluetooth sign appears when the phone is disconnected.
 
-The face is dark by default. Building with `FACE_THEME` set to `1` in `src/c/face.c` gives the light theme shown in the last row.
-
 ## Build
 
 From this directory, run:
@@ -53,13 +51,14 @@ pebble install --phone <ip>
 
 ## Settings
 
-Open the config page from the Pebble phone app. There are three settings.
+Open the config page from the Pebble phone app. There are four settings.
 
 - Days shown are 1, 2, 3, or 5. The default is 2.
 - The temperature unit is °F or °C. The default is °F.
 - Refresh is every 30 minutes, 45 minutes, or 1 hour. The default is 1 hour.
+- The theme is Dark or Light. The default is Dark.
 
-Changing the day count or the unit redraws the forecast already stored on the phone. It does not download again.
+Changing the day count, the unit, or the theme redraws the forecast already stored on the phone. It does not download again.
 
 The phone tries a network location first, then GPS, and keeps the last fix. The watch also asks the phone for a refresh every half hour and when Bluetooth reconnects, so the forecast stays current even if the phone pauses the app in the background. If a refresh fails, the watch keeps showing the last forecast. The temperature turns gray when the forecast is more than two hours old.
 

@@ -3,6 +3,7 @@ var forecast = require('./forecast');
 // Version 2 adds yesterday's row to each hour.
 var VERSION = 2;
 var HOUR_BYTES = 6;
+var LIGHT_FLAG = 0x10;
 
 // Both watches use the same centered stack: time, temperature, date and place,
 // a sky strip, the chart, precipitation, then steps and battery.
@@ -355,7 +356,8 @@ function buildFrame(forecastValue, settings, platform, nowUnix) {
   var o = 0;
   o = putU8(bytes, o, VERSION);
   o = putU8(bytes, o, platform === 'gabbro' ? 2 : 1);
-  o = putU8(bytes, o, unit === 'C' ? 2 : 1);
+  // Low bits: 1 for F, 2 for C. LIGHT_FLAG asks the watch for the light theme.
+  o = putU8(bytes, o, (unit === 'C' ? 2 : 1) | (settings.theme === 'light' ? LIGHT_FLAG : 0));
   o = putU8(bytes, o, n);
   o = putU32(bytes, o, forecastValue.fetchedAt || 0);
   o = putU32(bytes, o, selected[0].time);
@@ -436,7 +438,8 @@ function unpackFrame(bytes) {
   return {
     version: bytes[0],
     platform: bytes[1] === 2 ? 'gabbro' : 'emery',
-    unit: unitByte === 2 ? 'C' : 'F',
+    unit: (unitByte & 15) === 2 ? 'C' : 'F',
+    theme: unitByte & LIGHT_FLAG ? 'light' : 'dark',
     hourCount: hourCount,
     fetchedAt: readU32(bytes, 4),
     windowStart: readU32(bytes, 8),

@@ -12,10 +12,8 @@
 #define FACE_DATA_KEY 2
 #define FACE_NO_ROW 255
 
-// 0 draws on black, 1 draws on white.
-#ifndef FACE_THEME
-#define FACE_THEME 0
-#endif
+// The unit byte in the frame header carries this flag when the light theme is chosen.
+#define FACE_LIGHT_FLAG 0x10
 
 #if defined(PBL_ROUND)
 #define FACE_PLATFORM 2
@@ -43,6 +41,7 @@ typedef struct {
 
 typedef struct {
   bool ok;
+  bool light;
   uint8_t hour_count;
   uint8_t day_count;
   uint32_t fetched_at;
@@ -79,35 +78,36 @@ static const char *WEEKDAYS[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
 
 static Theme theme(void) {
   Theme t;
-#if FACE_THEME == 1
-  t.bg = GColorWhite;
-  t.text = GColorBlack;
-  t.muted = GColorDarkGray;
-  t.line = GColorBlack;
-  t.grid = GColorLightGray;
-  t.warmer = GColorRajah;
-  t.colder = GColorCadetBlue;
-  t.rain = GColorCobaltBlue;
-  t.snow = GColorDarkGray;
-  t.now = GColorBlack;
-  t.sky_sun = GColorYellow;
-  t.sky_cloud = GColorLightGray;
-  t.sky_night = GColorCobaltBlue;
-#else
-  t.bg = GColorBlack;
-  t.text = GColorWhite;
-  t.muted = GColorLightGray;
-  t.line = GColorWhite;
-  t.grid = GColorDarkGray;
-  t.warmer = GColorWindsorTan;
-  t.colder = GColorTiffanyBlue;
-  t.rain = GColorPictonBlue;
-  t.snow = GColorWhite;
-  t.now = GColorWhite;
-  t.sky_sun = GColorYellow;
-  t.sky_cloud = GColorLightGray;
-  t.sky_night = GColorDukeBlue;
-#endif
+  // Until the first forecast arrives, the face is dark.
+  if (s_face.light) {
+    t.bg = GColorWhite;
+    t.text = GColorBlack;
+    t.muted = GColorDarkGray;
+    t.line = GColorBlack;
+    t.grid = GColorLightGray;
+    t.warmer = GColorRajah;
+    t.colder = GColorCadetBlue;
+    t.rain = GColorCobaltBlue;
+    t.snow = GColorDarkGray;
+    t.now = GColorBlack;
+    t.sky_sun = GColorYellow;
+    t.sky_cloud = GColorLightGray;
+    t.sky_night = GColorCobaltBlue;
+  } else {
+    t.bg = GColorBlack;
+    t.text = GColorWhite;
+    t.muted = GColorLightGray;
+    t.line = GColorWhite;
+    t.grid = GColorDarkGray;
+    t.warmer = GColorWindsorTan;
+    t.colder = GColorTiffanyBlue;
+    t.rain = GColorPictonBlue;
+    t.snow = GColorWhite;
+    t.now = GColorWhite;
+    t.sky_sun = GColorYellow;
+    t.sky_cloud = GColorLightGray;
+    t.sky_night = GColorDukeBlue;
+  }
   return t;
 }
 
@@ -149,6 +149,7 @@ static bool unpack(Face *face, const uint8_t *data, int len) {
   }
 
   face->ok = true;
+  face->light = (data[2] & FACE_LIGHT_FLAG) != 0;
   face->hour_count = hour_count;
   face->day_count = day_count;
   face->fetched_at = read_u32(data + 4);
