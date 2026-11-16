@@ -85,28 +85,28 @@ static Theme theme(void) {
     t.muted = GColorDarkGray;
     t.line = GColorBlack;
     t.grid = GColorLightGray;
-    t.warmer = GColorRajah;
-    t.colder = GColorCadetBlue;
+    t.warmer = GColorOrange;
+    t.colder = GColorTiffanyBlue;
     t.rain = GColorCobaltBlue;
     t.snow = GColorDarkGray;
     t.now = GColorBlack;
-    t.sky_sun = GColorYellow;
+    t.sky_sun = GColorChromeYellow;
     t.sky_cloud = GColorLightGray;
-    t.sky_night = GColorCobaltBlue;
+    t.sky_night = GColorCeleste;
   } else {
     t.bg = GColorBlack;
     t.text = GColorWhite;
     t.muted = GColorLightGray;
     t.line = GColorWhite;
     t.grid = GColorDarkGray;
-    t.warmer = GColorWindsorTan;
+    t.warmer = GColorChromeYellow;
     t.colder = GColorTiffanyBlue;
     t.rain = GColorPictonBlue;
     t.snow = GColorWhite;
     t.now = GColorWhite;
     t.sky_sun = GColorYellow;
-    t.sky_cloud = GColorLightGray;
-    t.sky_night = GColorDukeBlue;
+    t.sky_cloud = GColorDarkGray;
+    t.sky_night = GColorOxfordBlue;
   }
   return t;
 }
@@ -245,16 +245,28 @@ static void draw_text(GContext *ctx, const char *text, GFont font, GRect box,
   graphics_draw_text(ctx, text, font, box, GTextOverflowModeTrailingEllipsis, align, NULL);
 }
 
-// Text that sits on the chart gets a one-pixel halo in the background color.
+// The color behind the chart at screen column x: the night backdrop or the background.
+static GColor backdrop_at(const Theme *t, int x) {
+  int n = s_face.hour_count;
+  int px = x - LAYOUT.plot.x;
+  if (n == 0 || px < 0 || px >= LAYOUT.plot.w) return t->bg;
+  int i = (px * n) / LAYOUT.plot.w;
+  while (i > 0 && column_x(i, n, LAYOUT.plot.w) > px) i -= 1;
+  while (i < n - 1 && column_x(i + 1, n, LAYOUT.plot.w) <= px) i += 1;
+  return s_face.hours[i].night ? t->sky_night : t->bg;
+}
+
+// Text that sits on the chart gets a one-pixel halo in whatever color is behind it.
 static void draw_halo_text(GContext *ctx, const Theme *t, const char *text, GFont font,
-                           int x, int y, GSize size) {
+                           int x, int y, GSize size, GColor color) {
   static const int8_t OFFSETS[4][2] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+  GColor halo = backdrop_at(t, x + size.w / 2);
   int k;
   for (k = 0; k < 4; k++) {
     draw_text(ctx, text, font, GRect(x + OFFSETS[k][0], y + OFFSETS[k][1], size.w, size.h),
-              GTextAlignmentLeft, t->bg);
+              GTextAlignmentLeft, halo);
   }
-  draw_text(ctx, text, font, GRect(x, y, size.w, size.h), GTextAlignmentLeft, t->text);
+  draw_text(ctx, text, font, GRect(x, y, size.w, size.h), GTextAlignmentLeft, color);
 }
 
 // Vertically centers one line of text in a box.
@@ -272,8 +284,31 @@ static void draw_fitted(GContext *ctx, const char *text, GFont font, GRect box,
 
 // ---- Chart ----
 
-// The sky lane: night is a dark segment, cloud is a band that swells with cover and has
-// rounded ends, and a sun sits in the middle of each clear daytime stretch.
+// Night hours get a dark backdrop that runs from the sky lane down through the rain lane.
+static void draw_night(GContext *ctx, const Theme *t) {
+  int n = s_face.hour_count;
+  int w = LAYOUT.plot.w;
+  int top = LAYOUT.cloud.y;
+  int bottom = LAYOUT.precip.y + LAYOUT.precip.h;
+  int i = 0;
+  while (i < n) {
+    if (!s_face.hours[i].night) {
+      i += 1;
+      continue;
+    }
+    int j = i;
+    while (j < n && s_face.hours[j].night) j += 1;
+    int x0 = column_x(i, n, w);
+    int x1 = column_x(j, n, w);
+    graphics_context_set_fill_color(ctx, t->sky_night);
+    graphics_fill_rect(ctx, GRect(LAYOUT.plot.x + x0, top, x1 - x0, bottom - top), 3,
+                       GCornersAll);
+    i = j;
+  }
+}
+
+// The sky lane: cloud is a band that swells with cover and has rounded ends, and a sun
+// sits in the middle of each clear daytime stretch.
 static void draw_sky(GContext *ctx, const Theme *t) {
   int n = s_face.hour_count;
   int w = LAYOUT.plot.w;
@@ -281,11 +316,6 @@ static void draw_sky(GContext *ctx, const Theme *t) {
   int cy = LAYOUT.cloud.y + lane / 2;
   int max_r = lane / 2;
   int i;
-  for (i = 0; i < n; i++) {
-    if (!s_face.hours[i].night) continue;
-    fill_rect(ctx, LAYOUT.plot.x + column_x(i, n, w), LAYOUT.cloud.y, column_w(i, n, w), lane,
-              t->sky_night);
-  }
   graphics_context_set_antialiased(ctx, true);
   graphics_context_set_fill_color(ctx, t->sky_cloud);
   for (i = 0; i < n; i++) {
@@ -334,7 +364,7 @@ static int row_at(int px, bool prev, bool *known) {
   return a + ((b - a) * (px - mid)) / (next - mid);
 }
 
-// Fill between today and yesterday at the same hour: warm where today is warmer, cool where colder.
+// Shade between today and yesterday at the same hour: warm where today is warmer, cool where colder.
 static void draw_fronts(GContext *ctx, const Theme *t) {
   int px;
   graphics_context_set_antialiased(ctx, false);
@@ -345,23 +375,23 @@ static void draw_fronts(GContext *ctx, const Theme *t) {
     int prev_y = row_at(px, true, &known_prev);
     if (!known_prev) continue;
     int x = LAYOUT.plot.x + px;
+    int y0;
+    int y1;
     if (prev_y > now_y + 1) {
-      fill_rect(ctx, x, LAYOUT.plot.y + now_y, 1, prev_y - now_y, t->warmer);
+      graphics_context_set_stroke_color(ctx, t->warmer);
+      y0 = now_y;
+      y1 = prev_y;
     } else if (now_y > prev_y + 1) {
-      fill_rect(ctx, x, LAYOUT.plot.y + prev_y, 1, now_y - prev_y, t->colder);
+      graphics_context_set_stroke_color(ctx, t->colder);
+      y0 = prev_y;
+      y1 = now_y;
+    } else {
+      continue;
     }
-  }
-}
-
-static void draw_day_breaks(GContext *ctx, const Theme *t) {
-  int n = s_face.hour_count;
-  int i;
-  for (i = 1; i < n; i++) {
-    if (local_seconds(i) != 0) continue;
-    int x = LAYOUT.plot.x + column_x(i, n, LAYOUT.plot.w);
+    // A checkerboard reads as a softer tone than a solid fill, so the line stays on top.
     int y;
-    for (y = LAYOUT.plot.y; y < LAYOUT.precip.y + LAYOUT.precip.h; y += 3) {
-      fill_rect(ctx, x, y, 1, 1, t->grid);
+    for (y = y0 + ((y0 + px) & 1); y < y1; y += 2) {
+      graphics_draw_pixel(ctx, GPoint(x, LAYOUT.plot.y + y));
     }
   }
 }
@@ -407,27 +437,35 @@ static void draw_day_labels(GContext *ctx, const Theme *t) {
   int i;
   for (i = 0; i < s_face.day_count; i++) {
     FaceDay day = s_face.days[i];
-    char max_text[12];
+    char name_text[6] = "";
+    char max_text[8];
     char min_text[8];
     int span = day.span - 3;
-    // With several days on screen, name each one; drop the name if the column is too narrow.
-    GSize max_size = GSizeZero;
-    if (named && day.wday <= 6) {
-      snprintf(max_text, sizeof(max_text), "%s %d", WEEKDAYS[day.wday], day.max_deg);
-      max_size = text_size(max_text, font);
-    }
-    if (!named || day.wday > 6 || max_size.w > span) {
-      snprintf(max_text, sizeof(max_text), "%d", day.max_deg);
-      max_size = text_size(max_text, font);
-    }
+    snprintf(max_text, sizeof(max_text), "%d", day.max_deg);
     snprintf(min_text, sizeof(min_text), "%d", day.min_deg);
+    GSize max_size = text_size(max_text, font);
     GSize min_size = text_size(min_text, font);
+    // With several days on screen, name each one in a quieter color; drop the name
+    // if the column is too narrow for it.
+    GSize name_size = GSizeZero;
+    int gap = 2;
+    if (named && day.wday <= 6) {
+      snprintf(name_text, sizeof(name_text), "%s", WEEKDAYS[day.wday]);
+      name_size = text_size(name_text, font);
+      if (name_size.w + gap + max_size.w > span) name_size = GSizeZero;
+    }
     int x = LAYOUT.plot.x + day.x + 3;
-    if (max_size.w > 0 && max_size.w <= span) {
-      draw_halo_text(ctx, t, max_text, font, x, LAYOUT.plot.y - 3, max_size);
+    int top = LAYOUT.plot.y - 3;
+    int max_x = name_size.w > 0 ? x + name_size.w + gap : x;
+    if (name_size.w > 0) {
+      draw_halo_text(ctx, t, name_text, font, x, top, name_size, t->muted);
+    }
+    if (max_size.w > 0 && max_x + max_size.w <= x + span) {
+      draw_halo_text(ctx, t, max_text, font, max_x, top, max_size, t->text);
     }
     if (min_size.w > 0 && min_size.w <= span) {
-      draw_halo_text(ctx, t, min_text, font, x, LAYOUT.plot.y + LAYOUT.plot.h - min_size.h, min_size);
+      draw_halo_text(ctx, t, min_text, font, x, LAYOUT.plot.y + LAYOUT.plot.h - min_size.h, min_size,
+                     t->text);
     }
   }
 }
@@ -449,7 +487,7 @@ static void draw_hour_labels(GContext *ctx, const Theme *t) {
     }
     GSize size = text_size(text, font);
     int x = LAYOUT.plot.x + column_mid(i, n, LAYOUT.plot.w) - size.w / 2;
-    draw_halo_text(ctx, t, text, font, x, LAYOUT.plot.y + LAYOUT.plot.h - size.h, size);
+    draw_halo_text(ctx, t, text, font, x, LAYOUT.plot.y + LAYOUT.plot.h - size.h, size, t->muted);
   }
 }
 
@@ -478,9 +516,9 @@ static void draw_precip(GContext *ctx, const Theme *t) {
 }
 
 static void draw_chart(GContext *ctx, const Theme *t, time_t now) {
+  draw_night(ctx, t);
   draw_sky(ctx, t);
   draw_fronts(ctx, t);
-  draw_day_breaks(ctx, t);
   draw_line(ctx, t);
   draw_precip(ctx, t);
   draw_day_labels(ctx, t);
