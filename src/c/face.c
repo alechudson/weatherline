@@ -67,10 +67,8 @@ typedef struct {
   GColor snow;
   GColor now;
   GColor sky_sun;
-  GColor sky_part;
   GColor sky_cloud;
   GColor sky_night;
-  GColor sky_night_cloud;
 } Theme;
 
 static Face s_face;
@@ -93,10 +91,8 @@ static Theme theme(void) {
   t.snow = GColorDarkGray;
   t.now = GColorBlack;
   t.sky_sun = GColorYellow;
-  t.sky_part = GColorPastelYellow;
   t.sky_cloud = GColorLightGray;
   t.sky_night = GColorCobaltBlue;
-  t.sky_night_cloud = GColorDarkGray;
 #else
   t.bg = GColorBlack;
   t.text = GColorWhite;
@@ -109,10 +105,8 @@ static Theme theme(void) {
   t.snow = GColorWhite;
   t.now = GColorWhite;
   t.sky_sun = GColorYellow;
-  t.sky_part = GColorLimerick;
   t.sky_cloud = GColorLightGray;
   t.sky_night = GColorDukeBlue;
-  t.sky_night_cloud = GColorDarkGray;
 #endif
   return t;
 }
@@ -277,25 +271,44 @@ static void draw_fitted(GContext *ctx, const char *text, GFont font, GRect box,
 
 // ---- Chart ----
 
-// The sky strip: sun, part cloud, or cloud by day; clear or cloudy by night.
+// The sky lane: night is a dark segment, cloud is a band that swells with cover and has
+// rounded ends, and a sun sits in the middle of each clear daytime stretch.
 static void draw_sky(GContext *ctx, const Theme *t) {
   int n = s_face.hour_count;
   int w = LAYOUT.plot.w;
-  int full = LAYOUT.cloud.h;
+  int lane = LAYOUT.cloud.h;
+  int cy = LAYOUT.cloud.y + lane / 2;
+  int max_r = lane / 2;
   int i;
   for (i = 0; i < n; i++) {
-    int c = s_face.hours[i].cloud_h;
-    GColor color;
-    if (s_face.hours[i].night) {
-      color = c * 2 > full ? t->sky_night_cloud : t->sky_night;
-    } else if (c * 5 <= full) {
-      color = t->sky_sun;
-    } else if (c * 5 <= full * 3) {
-      color = t->sky_part;
-    } else {
-      color = t->sky_cloud;
+    if (!s_face.hours[i].night) continue;
+    fill_rect(ctx, LAYOUT.plot.x + column_x(i, n, w), LAYOUT.cloud.y, column_w(i, n, w), lane,
+              t->sky_night);
+  }
+  graphics_context_set_antialiased(ctx, true);
+  graphics_context_set_fill_color(ctx, t->sky_cloud);
+  for (i = 0; i < n; i++) {
+    int r = (s_face.hours[i].cloud_h * max_r + lane / 2) / lane;
+    if (r < 1) continue;
+    fill_rect(ctx, LAYOUT.plot.x + column_x(i, n, w), cy - r, column_w(i, n, w), 2 * r, t->sky_cloud);
+    graphics_context_set_fill_color(ctx, t->sky_cloud);
+    graphics_fill_circle(ctx, GPoint(LAYOUT.plot.x + column_mid(i, n, w), cy), (uint16_t)r);
+  }
+  i = 0;
+  while (i < n) {
+    if (s_face.hours[i].night || s_face.hours[i].cloud_h * 4 > lane) {
+      i += 1;
+      continue;
     }
-    fill_rect(ctx, LAYOUT.plot.x + column_x(i, n, w), LAYOUT.cloud.y, column_w(i, n, w), full, color);
+    int j = i;
+    while (j < n && !s_face.hours[j].night && s_face.hours[j].cloud_h * 4 <= lane) j += 1;
+    int x0 = column_x(i, n, w);
+    int x1 = column_x(j, n, w);
+    if (x1 - x0 >= 10) {
+      graphics_context_set_fill_color(ctx, t->sky_sun);
+      graphics_fill_circle(ctx, GPoint(LAYOUT.plot.x + (x0 + x1) / 2, cy), (uint16_t)(max_r - 1));
+    }
+    i = j;
   }
 }
 
@@ -439,18 +452,27 @@ static void draw_hour_labels(GContext *ctx, const Theme *t) {
   }
 }
 
+// Rain is a bar per hour rising from the baseline; snow is a stack of flakes above any rain.
 static void draw_precip(GContext *ctx, const Theme *t) {
   int n = s_face.hour_count;
   int w = LAYOUT.plot.w;
+  int base = LAYOUT.precip.y + LAYOUT.precip.h;
   int i;
-  fill_rect(ctx, LAYOUT.precip.x, LAYOUT.precip.y + LAYOUT.precip.h - 1, LAYOUT.precip.w, 1, t->grid);
+  fill_rect(ctx, LAYOUT.precip.x, base - 1, LAYOUT.precip.w, 1, t->grid);
   for (i = 0; i < n; i++) {
     int x = LAYOUT.plot.x + column_x(i, n, w);
     int cw = column_w(i, n, w);
+    if (cw >= 4) cw -= 1;
     int rain = s_face.hours[i].rain_h;
     int snow = s_face.hours[i].snow_h;
-    if (rain > 0) fill_rect(ctx, x, LAYOUT.precip.y + LAYOUT.precip.h - rain, cw, rain, t->rain);
-    if (snow > 0) fill_rect(ctx, x, LAYOUT.precip.y, cw, snow, t->snow);
+    if (rain > 0) fill_rect(ctx, x, base - rain, cw, rain, t->rain);
+    if (snow > 0) {
+      int top = base - rain;
+      int y;
+      for (y = top - 2; y > top - snow - 1 && y >= LAYOUT.precip.y; y -= 3) {
+        fill_rect(ctx, x + cw / 2 - 1, y, 2, 2, t->snow);
+      }
+    }
   }
 }
 

@@ -4,7 +4,7 @@ Weatherline is a watchface for Pebble Time 2 (emery) and Pebble Round 2 (gabbro)
 
 Both watches share one centered layout: the time, the current temperature, the date and place, then the chart, then steps and battery.
 
-The chart is a temperature line with an orange marker for now. The area between the line and the same hour yesterday is shaded pink where it will be warmer and blue where it will be colder, so warm and cold fronts stand out. A strip along the top shows the sky: yellow for sun, pale yellow for some cloud, gray for overcast, and navy for night. Rain and snow are bars along the bottom. Each day is labeled with its high and low, and with its name when more than one day is shown.
+The chart is a temperature line with a ring marking now. The area between the line and the same hour yesterday is shaded amber where it will be warmer and teal where it will be colder, so warm and cold fronts stand out. A lane along the top shows the sky: a gray cloud band that swells with cloud cover, a sun over clear daytime stretches, and a dark segment for night. Rain is a bar per hour along the bottom, taller when heavier, and snow is a stack of flakes. Each day is labeled with its high and low, and with its name when more than one day is shown.
 
 | Time 2 | Round 2 |
 | --- | --- |

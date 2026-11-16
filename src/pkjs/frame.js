@@ -108,61 +108,6 @@ function selectHours(hours, offset, days, nowUnix) {
   return out;
 }
 
-function sunRadius(hourCount) {
-  if (hourCount <= 24) return 5;
-  if (hourCount <= 48) return 4;
-  if (hourCount <= 72) return 3;
-  return 2;
-}
-
-function collectSuns(hours, layout) {
-  var n = hours.length;
-  var plotW = layout.plot.w;
-  var runs = [];
-  var i = 0;
-  while (i < n) {
-    if (!(hours[i].isDay === 1 && hours[i].cloud < 25)) {
-      i += 1;
-      continue;
-    }
-    var j = i + 1;
-    while (j < n && hours[j].isDay === 1 && hours[j].cloud < 25) j += 1;
-    var x0 = Math.floor(i * plotW / n);
-    var x1 = Math.floor(j * plotW / n);
-    var width = x1 - x0;
-    if (width >= 10) {
-      var center = x0 + Math.floor(width / 2);
-      runs.push({
-        i0: i,
-        width: width,
-        x: (layout.plot.x + center) - layout.cloud.x,
-        y: Math.floor(layout.cloud.h / 2)
-      });
-    }
-    i = j;
-  }
-  runs.sort(function(a, b) {
-    if (a.width !== b.width) return b.width - a.width;
-    return a.i0 - b.i0;
-  });
-  var kept = [];
-  var r;
-  for (r = 0; r < runs.length && kept.length < 6; r++) {
-    var ok = true;
-    var k;
-    for (k = 0; k < kept.length; k++) {
-      if (Math.abs(kept[k].x - runs[r].x) <= 10) ok = false;
-    }
-    if (ok) kept.push(runs[r]);
-  }
-  var radius = sunRadius(n);
-  var suns = [];
-  for (r = 0; r < kept.length; r++) {
-    suns.push({x: kept[r].x, y: kept[r].y, r: radius});
-  }
-  return suns;
-}
-
 function dayGroups(hours, offset) {
   var groups = [];
   var current = null;
@@ -397,7 +342,6 @@ function buildFrame(forecastValue, settings, platform, nowUnix) {
     });
   }
 
-  var suns = collectSuns(selected, layout);
   var currentDeg = -32768;
   if (isNum(forecastValue.currentC)) {
     currentDeg = whole(forecastValue.currentC, unit);
@@ -406,7 +350,7 @@ function buildFrame(forecastValue, settings, platform, nowUnix) {
   }
 
   var place = forecast.clipPlace(forecastValue.place || '');
-  var size = 40 + n * HOUR_BYTES + dayRecs.length * 8 + suns.length * 4;
+  var size = 40 + n * HOUR_BYTES + dayRecs.length * 8;
   var bytes = new Uint8Array(size);
   var o = 0;
   o = putU8(bytes, o, VERSION);
@@ -419,7 +363,8 @@ function buildFrame(forecastValue, settings, platform, nowUnix) {
   o = putU32(bytes, o, offset);
   o = putI16(bytes, o, currentDeg);
   o = putU8(bytes, o, dayRecs.length);
-  o = putU8(bytes, o, suns.length);
+  // The sun count stays in the header at zero; the watch places suns itself.
+  o = putU8(bytes, o, 0);
   putUtf8(bytes, o, place, 15);
   o += 16;
 
@@ -440,13 +385,6 @@ function buildFrame(forecastValue, settings, platform, nowUnix) {
     o = putI16(bytes, o, day.minDeg);
     o = putU8(bytes, o, day.wday);
     o = putU8(bytes, o, day.mday);
-  }
-  var s;
-  for (s = 0; s < suns.length; s++) {
-    o = putU8(bytes, o, suns[s].x);
-    o = putU8(bytes, o, suns[s].y);
-    o = putU8(bytes, o, suns[s].r);
-    o = putU8(bytes, o, 0);
   }
   return bytes;
 }
