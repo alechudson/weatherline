@@ -1,0 +1,10 @@
+build/
+node_modules/
+.lock-waf*
+.wafpickle-*
+.waf*
+*.pbw
+.pebble/
+__pycache__/
+*.pyc
+.DS_Store
