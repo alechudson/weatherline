@@ -26,7 +26,22 @@
       }
     ],
     "resources": {
-      "media": []
+      "media": [
+        {
+          "type": "font",
+          "name": "FONT_TIME_64",
+          "file": "fonts/InterDisplay-SemiBold.otf",
+          "characterRegex": "[0-9:]",
+          "targetPlatforms": ["emery"]
+        },
+        {
+          "type": "font",
+          "name": "FONT_TIME_54",
+          "file": "fonts/InterDisplay-SemiBold.otf",
+          "characterRegex": "[0-9:]",
+          "targetPlatforms": ["gabbro"]
+        }
+      ]
     }
   }
 }

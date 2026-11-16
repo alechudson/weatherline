@@ -49,6 +49,53 @@ test('showers are added to rain', function() {
   assert.equal(parsed.hours[0].rainMm, 2);
 });
 
+test('wind is read when present and left empty when the response has none', function() {
+  var body = {
+    utc_offset_seconds: 0,
+    hourly: {
+      time: [0, 3600],
+      temperature_2m: [10, 11],
+      rain: [0, 0],
+      showers: [0, 0],
+      snowfall: [0, 0],
+      cloud_cover: [0, 0],
+      is_day: [1, 1],
+      wind_speed_10m: [12.5, null],
+      wind_direction_10m: [-90, 370]
+    }
+  };
+  var parsed = forecast.parseForecast(JSON.stringify(body), 1);
+  assert.equal(parsed.hours[0].windKmh, 12.5);
+  assert.equal(parsed.hours[0].windDir, 270);
+  assert.equal(parsed.hours[1].windKmh, null);
+  assert.equal(parsed.hours[1].windDir, 10);
+
+  body.hourly.wind_speed_10m = [1];
+  delete body.hourly.wind_direction_10m;
+  parsed = forecast.parseForecast(JSON.stringify(body), 1);
+  assert.equal(parsed.hours.length, 2);
+  assert.equal(parsed.hours[0].windKmh, null);
+  assert.equal(parsed.hours[0].windDir, null);
+});
+
+test('a cache written before wind was fetched is still read', function() {
+  var storage = memory();
+  var parsed = forecast.parseForecast(fixtureText(), 50);
+  parsed.lat = 1;
+  parsed.lon = 2;
+  parsed.place = '';
+  parsed.hours.forEach(function(hour) {
+    delete hour.windKmh;
+    delete hour.windDir;
+  });
+  forecast.writeCache(storage, parsed);
+  assert.deepEqual(forecast.readCache(storage), parsed);
+
+  parsed.hours[0].windKmh = 'fast';
+  forecast.writeCache(storage, parsed);
+  assert.equal(forecast.readCache(storage), null);
+});
+
 test('mismatched hourly lengths, a non-finite offset, and truncated JSON are null', function() {
   var parsed = JSON.parse(fixtureText());
   parsed.hourly.rain.pop();
@@ -91,5 +138,7 @@ test('readCache rejects a shape that is not a forecast and round-trips a real on
 test('forecast URL prints latitude and longitude with Number conversion', function() {
   var url = forecast.forecastUrl('30.5', -97.5);
   assert.equal(url.indexOf('latitude=30.5&longitude=-97.5&') > 0, true);
-  assert.equal(url.indexOf('hourly=temperature_2m,rain,showers,snowfall,cloud_cover,is_day') > 0, true);
+  assert.equal(url.indexOf('hourly=temperature_2m,rain,showers,snowfall,cloud_cover,is_day,'
+    + 'wind_speed_10m,wind_direction_10m&') > 0, true);
+  assert.equal(url.indexOf('wind_speed_unit=kmh') > 0, true);
 });

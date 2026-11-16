@@ -77,6 +77,36 @@ test('rain and snow bar heights follow the lane rules', function() {
   });
 });
 
+test('wind fills the lane at 50 km/h and keeps its direction in 2-degree steps', function() {
+  var start = 1794722400;
+  function hour(i, kmh, dir) {
+    return {time: start + i * 3600, tempC: 20, rainMm: 0, snowCm: 0, cloud: 0, isDay: 1,
+      windKmh: kmh, windDir: dir};
+  }
+  var made = {
+    fetchedAt: NOW,
+    utcOffsetSeconds: -21600,
+    currentC: 20,
+    place: 'X',
+    days: [],
+    hours: [hour(0, 50, 0), hour(1, 80, 359), hour(2, 25, 181), hour(3, 0, 90), hour(4, null, null)]
+  };
+  ['emery', 'gabbro'].forEach(function(platform) {
+    var unpacked = frame.unpackFrame(frame.buildFrame(made, settings(1, 'C'), platform, NOW));
+    var lane = frame.layouts[platform].wind.h;
+    assert.equal(unpacked.hours[0].windH, lane);
+    assert.equal(unpacked.hours[1].windH, lane);
+    assert.equal(unpacked.hours[2].windH, Math.round(lane / 2));
+    assert.equal(unpacked.hours[3].windH, 0);
+    assert.equal(unpacked.hours[4].windH, 0);
+    assert.equal(unpacked.hours[0].windDir, 0);
+    assert.equal(unpacked.hours[1].windDir, 0);
+    assert.equal(unpacked.hours[2].windDir, 91);
+    assert.equal(unpacked.hours[3].windDir, 45);
+    assert.equal(unpacked.hours[4].windDir, 255);
+  });
+});
+
 test('a flat 20C day keeps every tempY on one row', function() {
   var start = 1794722400;
   var hours = [];
@@ -107,7 +137,7 @@ test('unpackFrame matches hour count, current, and place, and a flipped version 
   assert.equal(unpacked.place, 'Creek');
   bytes[0] = 9;
   assert.equal(frame.unpackFrame(bytes), null);
-  bytes[0] = 2;
+  bytes[0] = frame.version;
   assert.equal(frame.unpackFrame(bytes.subarray(0, bytes.length - 1)), null);
 });
 

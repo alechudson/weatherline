@@ -19,6 +19,7 @@ typedef struct {
   Rect meta;
   Rect cloud;
   Rect plot;
+  Rect wind;
   Rect precip;
   int16_t bt_x;
   int16_t bt_y;
@@ -29,14 +30,15 @@ typedef struct {
 static const Layout LAYOUT = {
   .steps = {58, 210, 72, 16},
   .battery = {150, 210, 52, 16},
-  .time = {55, 32, 150, 40},
-  .temp = {70, 72, 120, 30},
+  .time = {60, 28, 140, 50},
+  .temp = {0, 0, 0, 0},
   .date = {0, 0, 0, 0},
   .place = {0, 0, 0, 0},
-  .meta = {40, 102, 180, 18},
-  .cloud = {36, 124, 188, 9},
-  .plot = {36, 134, 188, 58},
-  .precip = {36, 192, 188, 16},
+  .meta = {40, 76, 180, 24},
+  .cloud = {36, 102, 188, 15},
+  .plot = {36, 118, 188, 58},
+  .wind = {36, 177, 188, 13},
+  .precip = {36, 191, 188, 15},
   .bt_x = 140,
   .bt_y = 218,
   .bt_r = 4,
@@ -45,14 +47,15 @@ static const Layout LAYOUT = {
 static const Layout LAYOUT = {
   .steps = {4, 210, 92, 16},
   .battery = {104, 210, 92, 16},
-  .time = {0, 2, 200, 46},
-  .temp = {0, 46, 200, 30},
+  .time = {0, 3, 200, 50},
+  .temp = {0, 0, 0, 0},
   .date = {0, 0, 0, 0},
   .place = {0, 0, 0, 0},
-  .meta = {4, 76, 192, 18},
-  .cloud = {4, 98, 192, 10},
-  .plot = {4, 109, 192, 83},
-  .precip = {4, 192, 192, 16},
+  .meta = {4, 53, 192, 24},
+  .cloud = {4, 79, 192, 16},
+  .plot = {4, 96, 192, 81},
+  .wind = {4, 178, 192, 14},
+  .precip = {4, 193, 192, 15},
   .bt_x = 100,
   .bt_y = 218,
   .bt_r = 4,

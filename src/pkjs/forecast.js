@@ -1,6 +1,6 @@
 var CACHE_KEY = 'weatherline.forecast';
 
-var HOURLY = 'temperature_2m,rain,showers,snowfall,cloud_cover,is_day';
+var HOURLY = 'temperature_2m,rain,showers,snowfall,cloud_cover,is_day,wind_speed_10m,wind_direction_10m';
 
 function isNum(value) {
   return typeof value === 'number' && isFinite(value);
@@ -76,6 +76,11 @@ function parseForecast(text, fetchedAt) {
   for (c = 0; c < columns.length; c++) {
     if (!isArray(columns[c]) || columns[c].length !== n) return null;
   }
+  // Wind is optional: a response without it still draws, just with an empty wind lane.
+  var windSpeed = hourly.wind_speed_10m;
+  var windDir = hourly.wind_direction_10m;
+  if (!isArray(windSpeed) || windSpeed.length !== n) windSpeed = null;
+  if (!isArray(windDir) || windDir.length !== n) windDir = null;
 
   var hours = [];
   var i;
@@ -89,7 +94,9 @@ function parseForecast(text, fetchedAt) {
       rainMm: rainMm,
       snowCm: isNum(snow[i]) ? snow[i] : 0,
       cloud: cloudByte(cloud[i]),
-      isDay: isDay[i] === 1 ? 1 : 0
+      isDay: isDay[i] === 1 ? 1 : 0,
+      windKmh: windSpeed && isNum(windSpeed[i]) && windSpeed[i] >= 0 ? windSpeed[i] : null,
+      windDir: windDir && isNum(windDir[i]) ? ((windDir[i] % 360) + 360) % 360 : null
     });
   }
   if (!hours.length) return null;
@@ -131,7 +138,7 @@ function forecastUrl(lat, lon) {
     + '&longitude=' + Number(lon)
     + '&hourly=' + HOURLY
     + '&daily=temperature_2m_max,temperature_2m_min'
-    + '&current=temperature_2m&timezone=auto&timeformat=unixtime'
+    + '&current=temperature_2m&timezone=auto&timeformat=unixtime&wind_speed_unit=kmh'
     + '&forecast_days=5&past_days=1&temperature_unit=celsius&precipitation_unit=mm';
 }
 
@@ -156,10 +163,16 @@ function placeFromBody(text) {
   return '';
 }
 
+function optionalNum(value) {
+  return value === undefined || value === null || isNum(value);
+}
+
+// Wind fields are optional so a cache written before wind was fetched stays usable.
 function validHour(hour) {
   return !!hour && isNum(hour.time) && isNum(hour.tempC) && isNum(hour.rainMm)
     && isNum(hour.snowCm) && isNum(hour.cloud) && hour.cloud >= 0 && hour.cloud <= 100
-    && hour.cloud === Math.round(hour.cloud) && (hour.isDay === 0 || hour.isDay === 1);
+    && hour.cloud === Math.round(hour.cloud) && (hour.isDay === 0 || hour.isDay === 1)
+    && optionalNum(hour.windKmh) && optionalNum(hour.windDir);
 }
 
 function validDay(day) {

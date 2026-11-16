@@ -55,6 +55,7 @@ static void init(void) {
   uint32_t inbox = app_message_inbox_size_maximum();
   app_message_open(inbox, 64);
 
+  face_init();
   face_load();
 
   s_window = window_create();
@@ -78,6 +79,7 @@ static void deinit(void) {
   tick_timer_service_unsubscribe();
   layer_destroy(s_layer);
   window_destroy(s_window);
+  face_deinit();
 }
 
 int main(void) {

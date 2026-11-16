@@ -2,7 +2,7 @@ var fs = require('fs');
 var path = require('path');
 var frame = require('../src/pkjs/frame');
 
-var RECTS = ['steps', 'battery', 'time', 'temp', 'date', 'place', 'meta', 'cloud', 'plot', 'precip'];
+var RECTS = ['steps', 'battery', 'time', 'temp', 'date', 'place', 'meta', 'cloud', 'plot', 'wind', 'precip'];
 
 function rectText(layout, name) {
   var rect = layout[name] || {x: 0, y: 0, w: 0, h: 0};
@@ -42,6 +42,7 @@ function headerText() {
     + '  Rect meta;\n'
     + '  Rect cloud;\n'
     + '  Rect plot;\n'
+    + '  Rect wind;\n'
     + '  Rect precip;\n'
     + '  int16_t bt_x;\n'
     + '  int16_t bt_y;\n'

@@ -1,16 +1,18 @@
 #include "face.h"
 #include "layout.h"
 
-#define FACE_VERSION 2
-#define FACE_HOUR_BYTES 6
+#define FACE_VERSION 3
+#define FACE_HOUR_BYTES 8
+#define FACE_DAY_BYTES 8
 #define FACE_MAX_HOURS 144
 #define FACE_MAX_DAYS 6
 #define FACE_MAX_SUNS 6
-#define FACE_MAX_BYTES (40 + FACE_MAX_HOURS * FACE_HOUR_BYTES + FACE_MAX_DAYS * 8 + FACE_MAX_SUNS * 4)
+#define FACE_MAX_BYTES (40 + FACE_MAX_HOURS * FACE_HOUR_BYTES + FACE_MAX_DAYS * FACE_DAY_BYTES + FACE_MAX_SUNS * 4)
 #define FACE_CHUNK 240
 #define FACE_LEN_KEY 1
 #define FACE_DATA_KEY 2
 #define FACE_NO_ROW 255
+#define FACE_NO_DIR 255
 
 // The unit byte in the frame header carries this flag when the light theme is chosen.
 #define FACE_LIGHT_FLAG 0x10
@@ -28,6 +30,8 @@ typedef struct {
   uint8_t snow_h;
   uint8_t cloud_h;
   uint8_t prev_y;
+  uint8_t wind_h;
+  uint8_t wind_dir;
 } FaceHour;
 
 typedef struct {
@@ -68,6 +72,11 @@ typedef struct {
   GColor sky_sun;
   GColor sky_cloud;
   GColor sky_night;
+  GColor cloud_rim;
+  GColor moon;
+  GColor wind;
+  GColor wind_arrow;
+  GColor wind_strong;
 } Theme;
 
 static Face s_face;
@@ -93,6 +102,11 @@ static Theme theme(void) {
     t.sky_sun = GColorChromeYellow;
     t.sky_cloud = GColorLightGray;
     t.sky_night = GColorCeleste;
+    t.cloud_rim = GColorDarkGray;
+    t.moon = GColorDarkGray;
+    t.wind = GColorMintGreen;
+    t.wind_arrow = GColorDarkGreen;
+    t.wind_strong = GColorOrange;
   } else {
     t.bg = GColorBlack;
     t.text = GColorWhite;
@@ -107,6 +121,11 @@ static Theme theme(void) {
     t.sky_sun = GColorYellow;
     t.sky_cloud = GColorDarkGray;
     t.sky_night = GColorOxfordBlue;
+    t.cloud_rim = GColorLightGray;
+    t.moon = GColorPastelYellow;
+    t.wind = GColorMidnightGreen;
+    t.wind_arrow = GColorMintGreen;
+    t.wind_strong = GColorChromeYellow;
   }
   return t;
 }
@@ -142,7 +161,7 @@ static bool unpack(Face *face, const uint8_t *data, int len) {
   uint8_t hour_count = data[3];
   uint8_t day_count = data[22];
   uint8_t sun_count = data[23];
-  int expect = 40 + (int)hour_count * FACE_HOUR_BYTES + (int)day_count * 8 + (int)sun_count * 4;
+  int expect = 40 + (int)hour_count * FACE_HOUR_BYTES + (int)day_count * FACE_DAY_BYTES + (int)sun_count * 4;
   if (expect != len) return false;
   if (hour_count > FACE_MAX_HOURS || day_count > FACE_MAX_DAYS || sun_count > FACE_MAX_SUNS) {
     return false;
@@ -169,6 +188,8 @@ static bool unpack(Face *face, const uint8_t *data, int len) {
     face->hours[i].snow_h = p[3];
     face->hours[i].cloud_h = p[4];
     face->hours[i].prev_y = p[5];
+    face->hours[i].wind_h = p[6];
+    face->hours[i].wind_dir = p[7];
     p += FACE_HOUR_BYTES;
   }
   for (i = 0; i < day_count; i++) {
@@ -178,7 +199,7 @@ static bool unpack(Face *face, const uint8_t *data, int len) {
     face->days[i].min_deg = read_i16(p + 4);
     face->days[i].wday = p[6];
     face->days[i].mday = p[7];
-    p += 8;
+    p += FACE_DAY_BYTES;
   }
   // Sun records follow; this design draws the sky strip instead, so they are skipped.
   return true;
@@ -307,40 +328,130 @@ static void draw_night(GContext *ctx, const Theme *t) {
   }
 }
 
-// The sky lane: cloud is a band that swells with cover and has rounded ends, and a sun
-// sits in the middle of each clear daytime stretch.
-static void draw_sky(GContext *ctx, const Theme *t) {
+// Value of an hourly field at pixel column px, interpolated between hour centers.
+static int field_at(int px, const uint8_t *base, int stride) {
+  int n = s_face.hour_count;
+  int w = LAYOUT.plot.w;
+  int i = 0;
+  while (i < n - 1 && px >= column_mid(i + 1, n, w)) i += 1;
+  int a = base[i * stride];
+  int mid = column_mid(i, n, w);
+  if (i >= n - 1 || px <= mid) return a;
+  int b = base[(i + 1) * stride];
+  int next = column_mid(i + 1, n, w);
+  if (next <= mid) return a;
+  return a + ((b - a) * (px - mid)) / (next - mid);
+}
+
+static int cloud_at(int px) {
+  return field_at(px, &s_face.hours[0].cloud_h, sizeof(FaceHour));
+}
+
+// A sun: a disc with eight short rays.
+static void draw_sun(GContext *ctx, const Theme *t, int x, int y, int r, int ray) {
+  int k;
+  graphics_context_set_antialiased(ctx, true);
+  graphics_context_set_stroke_color(ctx, t->sky_sun);
+  graphics_context_set_stroke_width(ctx, 1);
+  for (k = 0; k < 8; k++) {
+    int32_t angle = TRIG_MAX_ANGLE * k / 8;
+    int32_t s = sin_lookup(angle);
+    int32_t c = cos_lookup(angle);
+    int r0 = r + 2;
+    int r1 = r + 1 + ray;
+    graphics_draw_line(ctx,
+                       GPoint(x + (int)(s * r0 / TRIG_MAX_RATIO), y - (int)(c * r0 / TRIG_MAX_RATIO)),
+                       GPoint(x + (int)(s * r1 / TRIG_MAX_RATIO), y - (int)(c * r1 / TRIG_MAX_RATIO)));
+  }
+  graphics_context_set_fill_color(ctx, t->sky_sun);
+  graphics_fill_circle(ctx, GPoint(x, y), (uint16_t)r);
+}
+
+// A crescent: a disc with a second disc in the night color taken out of its upper right.
+static void draw_moon(GContext *ctx, const Theme *t, int x, int y, int r) {
+  graphics_context_set_antialiased(ctx, true);
+  graphics_context_set_fill_color(ctx, t->moon);
+  graphics_fill_circle(ctx, GPoint(x, y), (uint16_t)r);
+  graphics_context_set_fill_color(ctx, t->sky_night);
+  graphics_fill_circle(ctx, GPoint(x + r / 2 + 1, y - r / 2), (uint16_t)r);
+}
+
+// Clear stretches of the lane get a sun by day and a moon by night, centered on the stretch.
+static void draw_sky_bodies(GContext *ctx, const Theme *t) {
   int n = s_face.hour_count;
   int w = LAYOUT.plot.w;
   int lane = LAYOUT.cloud.h;
   int cy = LAYOUT.cloud.y + lane / 2;
-  int max_r = lane / 2;
-  int i;
-  graphics_context_set_antialiased(ctx, true);
-  graphics_context_set_fill_color(ctx, t->sky_cloud);
-  for (i = 0; i < n; i++) {
-    int r = (s_face.hours[i].cloud_h * max_r + lane / 2) / lane;
-    if (r < 1) continue;
-    fill_rect(ctx, LAYOUT.plot.x + column_x(i, n, w), cy - r, column_w(i, n, w), 2 * r, t->sky_cloud);
-    graphics_context_set_fill_color(ctx, t->sky_cloud);
-    graphics_fill_circle(ctx, GPoint(LAYOUT.plot.x + column_mid(i, n, w), cy), (uint16_t)r);
-  }
-  i = 0;
+  // Up to about 40% cover counts as clear enough to see the sun or moon.
+  int clear = (lane * 2) / 5;
+  int i = 0;
   while (i < n) {
-    if (s_face.hours[i].night || s_face.hours[i].cloud_h * 4 > lane) {
+    bool night = s_face.hours[i].night != 0;
+    if (s_face.hours[i].cloud_h > clear) {
       i += 1;
       continue;
     }
     int j = i;
-    while (j < n && !s_face.hours[j].night && s_face.hours[j].cloud_h * 4 <= lane) j += 1;
+    while (j < n && (s_face.hours[j].night != 0) == night && s_face.hours[j].cloud_h <= clear) j += 1;
     int x0 = column_x(i, n, w);
     int x1 = column_x(j, n, w);
-    if (x1 - x0 >= 10) {
-      graphics_context_set_fill_color(ctx, t->sky_sun);
-      graphics_fill_circle(ctx, GPoint(LAYOUT.plot.x + (x0 + x1) / 2, cy), (uint16_t)(max_r - 1));
+    int x = LAYOUT.plot.x + (x0 + x1) / 2;
+    if (night) {
+      if (x1 - x0 >= 12) draw_moon(ctx, t, x, cy, lane / 2 - 3);
+    } else if (x1 - x0 >= 16) {
+      draw_sun(ctx, t, x, cy, lane / 4, lane / 2 - lane / 4 - 1);
+    } else if (x1 - x0 >= 8) {
+      draw_sun(ctx, t, x, cy, lane / 4, 0);
     }
     i = j;
   }
+}
+
+// Clouds are a bank of puffs sitting on the lane floor. Each puff grows with the cover
+// under it, so thin cloud is a low ripple and overcast fills the lane. A one-pixel rim on
+// top of each puff gives the bank some shape.
+static void draw_clouds(GContext *ctx, const Theme *t) {
+  int w = LAYOUT.plot.w;
+  int lane = LAYOUT.cloud.h;
+  int floor_y = LAYOUT.cloud.y + lane;
+  int max_r = lane / 2;
+  int step = 5;
+  // Puff sizes cycle through this pattern so the top edge billows instead of running flat.
+  static const int8_t BILLOW[] = {0, -2, -1, -3, 0, -1, -2};
+  int pass;
+  graphics_context_set_antialiased(ctx, true);
+  for (pass = 0; pass < 2; pass++) {
+    int px;
+    int k = 0;
+    graphics_context_set_fill_color(ctx, pass == 0 ? t->cloud_rim : t->sky_cloud);
+    for (px = 0; px < w; px += step, k++) {
+      int c = cloud_at(px);
+      int r = (c * max_r + lane / 2) / lane;
+      if (r >= 3) r += BILLOW[k % (int)ARRAY_LENGTH(BILLOW)];
+      if (r < 2) continue;
+      // Keep each puff inside the chart's width.
+      int x = LAYOUT.plot.x + px;
+      if (x < LAYOUT.plot.x + r) x = LAYOUT.plot.x + r;
+      if (x > LAYOUT.plot.x + w - 1 - r) x = LAYOUT.plot.x + w - 1 - r;
+      int y = floor_y - r;
+      int rr = pass == 0 ? r : r - 1;
+      if (rr < 1) continue;
+      graphics_fill_circle(ctx, GPoint(x, y), (uint16_t)rr);
+      // Square off the bottom half so the bank sits flat on the floor.
+      int left = x - rr;
+      int right = x + rr;
+      if (left < LAYOUT.plot.x) left = LAYOUT.plot.x;
+      if (right > LAYOUT.plot.x + w) right = LAYOUT.plot.x + w;
+      if (pass == 1 && right > left) {
+        graphics_fill_rect(ctx, GRect(left, y, right - left + 1, floor_y - y), 0, GCornerNone);
+      }
+    }
+  }
+}
+
+static void draw_sky(GContext *ctx, const Theme *t) {
+  draw_sky_bodies(ctx, t);
+  draw_clouds(ctx, t);
 }
 
 // Row of the line at pixel column px, interpolated between hour centers.
@@ -491,6 +602,80 @@ static void draw_hour_labels(GContext *ctx, const Theme *t) {
   }
 }
 
+// Arrows go every few hours: the smallest step that divides a day and leaves room between them.
+static int wind_step_hours(void) {
+  static const int STEPS[] = {1, 2, 3, 4, 6, 8, 12, 24};
+  int n = s_face.hour_count;
+  int k;
+  for (k = 0; k < (int)ARRAY_LENGTH(STEPS); k++) {
+    if (STEPS[k] * LAYOUT.plot.w >= 13 * n) return STEPS[k];
+  }
+  return 24;
+}
+
+// An arrow pointing the way the wind blows, i.e. away from where it comes from.
+static void draw_wind_arrow(GContext *ctx, int x, int y, int from_deg, int len) {
+  int32_t angle = TRIG_MAX_ANGLE * ((from_deg + 180) % 360) / 360;
+  int32_t s = sin_lookup(angle);
+  int32_t c = cos_lookup(angle);
+  int half = len / 2;
+  GPoint tip = GPoint(x + (int)(s * half / TRIG_MAX_RATIO), y - (int)(c * half / TRIG_MAX_RATIO));
+  GPoint tail = GPoint(x - (int)(s * half / TRIG_MAX_RATIO), y + (int)(c * half / TRIG_MAX_RATIO));
+  graphics_draw_line(ctx, tail, tip);
+  int head = 3 + len / 6;
+  int k;
+  for (k = -1; k <= 1; k += 2) {
+    int32_t back = angle + TRIG_MAX_ANGLE / 2 + k * TRIG_MAX_ANGLE / 10;
+    graphics_draw_line(ctx, tip,
+                       GPoint(tip.x + (int)(sin_lookup(back) * head / TRIG_MAX_RATIO),
+                              tip.y - (int)(cos_lookup(back) * head / TRIG_MAX_RATIO)));
+  }
+}
+
+// The wind lane: speed is a soft area rising from the floor, and arrows every few hours show
+// which way it blows.
+static void draw_wind(GContext *ctx, const Theme *t) {
+  int n = s_face.hour_count;
+  int w = LAYOUT.plot.w;
+  int top = LAYOUT.wind.y;
+  int floor_y = LAYOUT.wind.y + LAYOUT.wind.h;
+  int px;
+  graphics_context_set_antialiased(ctx, false);
+  graphics_context_set_stroke_width(ctx, 1);
+  graphics_context_set_stroke_color(ctx, t->wind);
+  for (px = 0; px < w; px++) {
+    int h = field_at(px, &s_face.hours[0].wind_h, sizeof(FaceHour));
+    if (h <= 0) continue;
+    if (h > LAYOUT.wind.h) h = LAYOUT.wind.h;
+    graphics_draw_line(ctx, GPoint(LAYOUT.plot.x + px, floor_y - h),
+                       GPoint(LAYOUT.plot.x + px, floor_y - 1));
+  }
+
+  int step = wind_step_hours();
+  int len = LAYOUT.wind.h - 2;
+  int cy = top + LAYOUT.wind.h / 2;
+  int i;
+  graphics_context_set_antialiased(ctx, true);
+  graphics_context_set_stroke_width(ctx, 1);
+  for (i = 0; i < n; i++) {
+    int secs = local_seconds(i);
+    if (secs < 0 || (secs / 3600) % step != step / 2) continue;
+    FaceHour hour = s_face.hours[i];
+    int x = LAYOUT.plot.x + column_mid(i, n, w);
+    if (hour.wind_dir == FACE_NO_DIR) continue;
+    if (hour.wind_h == 0) {
+      // Calm: a dot instead of an arrow.
+      graphics_context_set_fill_color(ctx, t->wind_arrow);
+      graphics_fill_circle(ctx, GPoint(x, cy), 1);
+      continue;
+    }
+    // Strong wind, from about 30 km/h (19 mph), turns its arrows warm.
+    bool strong = hour.wind_h * 5 >= LAYOUT.wind.h * 3;
+    graphics_context_set_stroke_color(ctx, strong ? t->wind_strong : t->wind_arrow);
+    draw_wind_arrow(ctx, x, cy, hour.wind_dir * 2, len);
+  }
+}
+
 // Rain is a bar per hour rising from the baseline; snow is a stack of flakes above any rain.
 static void draw_precip(GContext *ctx, const Theme *t) {
   int n = s_face.hour_count;
@@ -520,6 +705,7 @@ static void draw_chart(GContext *ctx, const Theme *t, time_t now) {
   draw_sky(ctx, t);
   draw_fronts(ctx, t);
   draw_line(ctx, t);
+  draw_wind(ctx, t);
   draw_precip(ctx, t);
   draw_day_labels(ctx, t);
   draw_hour_labels(ctx, t);
@@ -535,6 +721,28 @@ static void draw_waiting(GContext *ctx, const Theme *t) {
 
 // ---- Header ----
 
+static GFont s_time_font;
+
+// Rows of empty space above the digits in each time font's text box.
+#if defined(PBL_ROUND)
+#define TIME_TOP_PAD 13
+#else
+#define TIME_TOP_PAD 16
+#endif
+
+void face_init(void) {
+#if defined(PBL_ROUND)
+  s_time_font = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_TIME_54));
+#else
+  s_time_font = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_TIME_64));
+#endif
+}
+
+void face_deinit(void) {
+  if (s_time_font) fonts_unload_custom_font(s_time_font);
+  s_time_font = NULL;
+}
+
 static void draw_time(GContext *ctx, const Theme *t, struct tm *local) {
   char text[8];
   const char *ampm = NULL;
@@ -546,19 +754,26 @@ static void draw_time(GContext *ctx, const Theme *t, struct tm *local) {
     snprintf(text, sizeof(text), "%d:%02d", hour, local->tm_min);
     ampm = local->tm_hour < 12 ? "AM" : "PM";
   }
-  GFont time_font = fonts_get_system_font(FONT_KEY_LECO_42_NUMBERS);
-  GFont small = fonts_get_system_font(FONT_KEY_GOTHIC_14);
-  GSize time_size = text_size(text, time_font);
+  GFont time_font = s_time_font ? s_time_font : fonts_get_system_font(FONT_KEY_LECO_42_NUMBERS);
+  GFont small = fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD);
+  GSize time_size = graphics_text_layout_get_content_size(
+      text, time_font, GRect(0, 0, 300, 100), GTextOverflowModeWordWrap, GTextAlignmentLeft);
   GSize am_size = ampm ? text_size(ampm, small) : GSizeZero;
-  int gap = ampm ? 2 : 0;
-  int x = LAYOUT.time.x + (LAYOUT.time.w - (time_size.w + gap + am_size.w)) / 2;
-  int y = LAYOUT.time.y;
-  if (time_size.h > 0 && time_size.h < LAYOUT.time.h) y += (LAYOUT.time.h - time_size.h) / 2;
-  draw_text(ctx, text, time_font, GRect(x, y, time_size.w, time_size.h), GTextAlignmentLeft, t->text);
+  int gap = ampm ? 3 : 0;
+  // Center the digits; AM or PM hangs off to the right without pushing them over, when it fits.
+  int x = LAYOUT.time.x + (LAYOUT.time.w - time_size.w) / 2;
+  if (ampm && x + time_size.w + gap + am_size.w > LAYOUT.time.x + LAYOUT.time.w) {
+    x = LAYOUT.time.x + (LAYOUT.time.w - (time_size.w + gap + am_size.w)) / 2;
+  }
+  // The font's box has empty space above the digits; the layout's time box is the digits.
+  int y = LAYOUT.time.y - TIME_TOP_PAD;
+  draw_text(ctx, text, time_font, GRect(x, y, time_size.w + 4, time_size.h + 4), GTextAlignmentLeft,
+            t->text);
   if (ampm) {
     draw_text(ctx, ampm, small,
-              GRect(x + time_size.w + gap, y + time_size.h - am_size.h, am_size.w, am_size.h),
-              GTextAlignmentLeft, t->text);
+              GRect(x + time_size.w + gap, LAYOUT.time.y + LAYOUT.time.h - am_size.h - 6,
+                    am_size.w, am_size.h),
+              GTextAlignmentLeft, t->muted);
   }
 }
 
@@ -569,33 +784,39 @@ static bool forecast_stale(time_t now) {
   return (now64 - fetched) > 7200;
 }
 
-static void draw_temp(GContext *ctx, const Theme *t, time_t now) {
-  char text[16];
+// One line under the time: the temperature in bold, then the date and place. The place
+// drops out when the line would not fit.
+static void draw_meta(GContext *ctx, const Theme *t, struct tm *local, time_t now) {
+  char temp[16];
   // An old forecast turns the temperature gray instead of hiding it.
-  GColor color = t->text;
+  GColor temp_color = t->text;
   if (!s_face.ok || s_face.current_deg == -32768) {
-    snprintf(text, sizeof(text), "--\xc2\xb0");
-    color = t->muted;
+    snprintf(temp, sizeof(temp), "--\xc2\xb0");
+    temp_color = t->muted;
   } else {
-    snprintf(text, sizeof(text), "%d\xc2\xb0", s_face.current_deg);
-    if (forecast_stale(now)) color = t->muted;
+    snprintf(temp, sizeof(temp), "%d\xc2\xb0", s_face.current_deg);
+    if (forecast_stale(now)) temp_color = t->muted;
   }
-  draw_fitted(ctx, text, fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD),
-              GRect(LAYOUT.temp.x, LAYOUT.temp.y, LAYOUT.temp.w, LAYOUT.temp.h),
-              GTextAlignmentCenter, color);
-}
-
-static void draw_meta(GContext *ctx, const Theme *t, struct tm *local) {
   const char *wday = (local->tm_wday >= 0 && local->tm_wday <= 6) ? WEEKDAYS[local->tm_wday] : "";
   char meta[40];
+  GFont temp_font = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
+  GFont meta_font = fonts_get_system_font(FONT_KEY_GOTHIC_18);
+  GSize temp_size = text_size(temp, temp_font);
+  int gap = 6;
+  int room = LAYOUT.meta.w - temp_size.w - gap;
+  snprintf(meta, sizeof(meta), "%s %d", wday, local->tm_mday);
   if (s_face.ok && s_face.place[0]) {
-    snprintf(meta, sizeof(meta), "%s %d  \xc2\xb7  %s", wday, local->tm_mday, s_face.place);
-  } else {
-    snprintf(meta, sizeof(meta), "%s %d", wday, local->tm_mday);
+    char with_place[64];
+    snprintf(with_place, sizeof(with_place), "%s  \xc2\xb7  %s", meta, s_face.place);
+    if (text_size(with_place, meta_font).w <= room) snprintf(meta, sizeof(meta), "%s", with_place);
   }
-  draw_fitted(ctx, meta, fonts_get_system_font(FONT_KEY_GOTHIC_18),
-              GRect(LAYOUT.meta.x, LAYOUT.meta.y, LAYOUT.meta.w, LAYOUT.meta.h),
-              GTextAlignmentCenter, t->muted);
+  GSize meta_size = text_size(meta, meta_font);
+  int x = LAYOUT.meta.x + (LAYOUT.meta.w - (temp_size.w + gap + meta_size.w)) / 2;
+  // Gothic 24 and 18 share a baseline when their boxes are offset by about 7 pixels.
+  int y = LAYOUT.meta.y + (LAYOUT.meta.h - 24) / 2 - 3;
+  draw_text(ctx, temp, temp_font, GRect(x, y, temp_size.w + 2, 30), GTextAlignmentLeft, temp_color);
+  draw_text(ctx, meta, meta_font, GRect(x + temp_size.w + gap, y + 7, meta_size.w + 2, 22),
+            GTextAlignmentLeft, t->muted);
 }
 
 // ---- Status row ----
@@ -701,8 +922,7 @@ void face_paint(Layer *layer, GContext *ctx) {
     draw_waiting(ctx, &t);
   }
   draw_time(ctx, &t, &local);
-  draw_temp(ctx, &t, now);
-  draw_meta(ctx, &t, &local);
+  draw_meta(ctx, &t, &local, now);
   draw_steps(ctx, &t);
   draw_battery(ctx, &t);
   draw_bluetooth(ctx);

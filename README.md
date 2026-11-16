@@ -2,9 +2,11 @@
 
 Weatherline is a watchface for Pebble Time 2 (emery) and Pebble Round 2 (gabbro). It draws an hour-by-hour forecast with the time, the place, today's steps, the battery, and the Bluetooth state.
 
-Both watches share one centered layout: the time, the current temperature, the date and place, then the chart, then steps and battery.
+Both watches share one centered layout: a large time, one line with the current temperature, the date and the place, then the chart, then steps and battery.
 
-The chart is a temperature line with a ring marking now. The area between the line and the same hour yesterday is shaded amber where it will be warmer and teal where it will be colder, so warm and cold fronts stand out. Night hours sit on a dark blue band behind the chart. A lane along the top shows the sky: a gray cloud band that swells with cloud cover, and a sun over clear daytime stretches. Rain is a bar per hour along the bottom, taller when heavier, and snow is a stack of flakes. Each day is labeled with its high and low, and with its name when more than one day is shown.
+The chart is a temperature line with a ring marking now. The area between the line and the same hour yesterday is shaded amber where it will be warmer and teal where it will be colder, so warm and cold fronts stand out. Night hours sit on a dark blue band behind the chart. A lane along the top shows the sky: a bank of puffy clouds that grows taller with cloud cover, a sun with rays over clear daytime stretches, and a crescent moon over clear nights. Below the chart, a wind lane shades wind speed (full at 50 km/h, about 31 mph) and places an arrow every few hours pointing the way the wind blows; arrows turn warm at about 30 km/h (19 mph) and calm hours get a dot. Rain is a bar per hour along the bottom, taller when heavier, and snow is a stack of flakes. Each day is labeled with its high and low, and with its name when more than one day is shown.
+
+The time is set in Inter Display SemiBold, included under the SIL Open Font License (`resources/fonts/OFL.txt`).
 
 | Time 2 | Round 2 |
 | --- | --- |

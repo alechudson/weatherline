@@ -1,32 +1,36 @@
 var forecast = require('./forecast');
 
-// Version 2 adds yesterday's row to each hour.
-var VERSION = 2;
-var HOUR_BYTES = 6;
+// Version 2 adds yesterday's row to each hour; version 3 adds wind to each hour.
+var VERSION = 3;
+var HOUR_BYTES = 8;
+var DAY_BYTES = 8;
+var NO_DIR = 255;
+// The wind lane is full at this speed.
+var WIND_FULL_KMH = 50;
 var LIGHT_FLAG = 0x10;
 
-// Both watches use the same centered stack: time, temperature, date and place,
-// a sky strip, the chart, precipitation, then steps and battery.
+// Both watches use the same centered stack: the time, one line with the temperature,
+// date and place, a sky lane, the chart, wind, precipitation, then steps and battery.
 var LAYOUTS = {
   emery: {
-    time: {x: 0, y: 2, w: 200, h: 46},
-    temp: {x: 0, y: 46, w: 200, h: 30},
-    meta: {x: 4, y: 76, w: 192, h: 18},
-    cloud: {x: 4, y: 98, w: 192, h: 10},
-    plot: {x: 4, y: 109, w: 192, h: 83},
-    precip: {x: 4, y: 192, w: 192, h: 16},
+    time: {x: 0, y: 3, w: 200, h: 50},
+    meta: {x: 4, y: 53, w: 192, h: 24},
+    cloud: {x: 4, y: 79, w: 192, h: 16},
+    plot: {x: 4, y: 96, w: 192, h: 81},
+    wind: {x: 4, y: 178, w: 192, h: 14},
+    precip: {x: 4, y: 193, w: 192, h: 15},
     steps: {x: 4, y: 210, w: 92, h: 16},
     battery: {x: 104, y: 210, w: 92, h: 16},
     bluetooth: {x: 100, y: 218, r: 4},
     inset: 14
   },
   gabbro: {
-    time: {x: 55, y: 32, w: 150, h: 40},
-    temp: {x: 70, y: 72, w: 120, h: 30},
-    meta: {x: 40, y: 102, w: 180, h: 18},
-    cloud: {x: 36, y: 124, w: 188, h: 9},
-    plot: {x: 36, y: 134, w: 188, h: 58},
-    precip: {x: 36, y: 192, w: 188, h: 16},
+    time: {x: 60, y: 28, w: 140, h: 50},
+    meta: {x: 40, y: 76, w: 180, h: 24},
+    cloud: {x: 36, y: 102, w: 188, h: 15},
+    plot: {x: 36, y: 118, w: 188, h: 58},
+    wind: {x: 36, y: 177, w: 188, h: 13},
+    precip: {x: 36, y: 191, w: 188, h: 15},
     steps: {x: 58, y: 210, w: 72, h: 16},
     battery: {x: 150, y: 210, w: 52, h: 16},
     bluetooth: {x: 140, y: 218, r: 4},
@@ -69,6 +73,17 @@ function barPx(amount, full, floor, laneH) {
   if (!(amount >= floor)) return 0;
   var px = Math.round(Math.sqrt(Math.min(1, amount / full)) * laneH);
   return Math.max(Math.min(3, laneH), px);
+}
+
+function windPx(kmh, laneH) {
+  if (!isNum(kmh) || kmh <= 0) return 0;
+  return Math.round(Math.min(1, kmh / WIND_FULL_KMH) * laneH);
+}
+
+// Direction the wind comes from, in 2-degree steps.
+function dirByte(deg) {
+  if (!isNum(deg)) return NO_DIR;
+  return Math.round((((deg % 360) + 360) % 360) / 2) % 180;
 }
 
 function localMidnight(unix, offset) {
@@ -305,7 +320,9 @@ function buildFrame(forecastValue, settings, platform, nowUnix) {
       night: hour.isDay === 1 ? 0 : 1,
       rainH: barPx(hour.rainMm, 4, 0.1, laneH),
       snowH: barPx(hour.snowCm, 1, 0.05, laneH),
-      cloudH: Math.round(hour.cloud / 100 * layout.cloud.h)
+      cloudH: Math.round(hour.cloud / 100 * layout.cloud.h),
+      windH: windPx(hour.windKmh, layout.wind.h),
+      windDir: dirByte(hour.windDir)
     });
   }
 
@@ -351,7 +368,7 @@ function buildFrame(forecastValue, settings, platform, nowUnix) {
   }
 
   var place = forecast.clipPlace(forecastValue.place || '');
-  var size = 40 + n * HOUR_BYTES + dayRecs.length * 8;
+  var size = 40 + n * HOUR_BYTES + dayRecs.length * DAY_BYTES;
   var bytes = new Uint8Array(size);
   var o = 0;
   o = putU8(bytes, o, VERSION);
@@ -378,6 +395,8 @@ function buildFrame(forecastValue, settings, platform, nowUnix) {
     o = putU8(bytes, o, rec.snowH);
     o = putU8(bytes, o, rec.cloudH);
     o = putU8(bytes, o, rec.prevY);
+    o = putU8(bytes, o, rec.windH);
+    o = putU8(bytes, o, rec.windDir);
   }
   for (g = 0; g < dayRecs.length; g++) {
     var day = dayRecs[g];
@@ -397,7 +416,7 @@ function unpackFrame(bytes) {
   var hourCount = bytes[3];
   var dayCount = bytes[22];
   var sunCount = bytes[23];
-  var expect = 40 + hourCount * HOUR_BYTES + dayCount * 8 + sunCount * 4;
+  var expect = 40 + hourCount * HOUR_BYTES + dayCount * DAY_BYTES + sunCount * 4;
   if (bytes.length !== expect) return null;
 
   var hours = [];
@@ -410,7 +429,9 @@ function unpackFrame(bytes) {
       rainH: bytes[o + 2],
       snowH: bytes[o + 3],
       cloudH: bytes[o + 4],
-      prevY: bytes[o + 5]
+      prevY: bytes[o + 5],
+      windH: bytes[o + 6],
+      windDir: bytes[o + 7]
     });
     o += HOUR_BYTES;
   }
@@ -425,7 +446,7 @@ function unpackFrame(bytes) {
       wday: bytes[o + 6],
       mday: bytes[o + 7]
     });
-    o += 8;
+    o += DAY_BYTES;
   }
   var suns = [];
   var s;
@@ -456,6 +477,7 @@ function unpackFrame(bytes) {
 }
 
 module.exports = {
+  version: VERSION,
   layouts: LAYOUTS,
   columnBox: columnBox,
   buildFrame: buildFrame,
