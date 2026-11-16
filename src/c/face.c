@@ -75,6 +75,7 @@ typedef struct {
   GColor cloud_rim;
   GColor moon;
   GColor wind;
+  GColor wind_edge;
   GColor wind_arrow;
   GColor wind_strong;
 } Theme;
@@ -105,6 +106,7 @@ static Theme theme(void) {
     t.cloud_rim = GColorDarkGray;
     t.moon = GColorDarkGray;
     t.wind = GColorMintGreen;
+    t.wind_edge = GColorMayGreen;
     t.wind_arrow = GColorDarkGreen;
     t.wind_strong = GColorOrange;
   } else {
@@ -114,17 +116,18 @@ static Theme theme(void) {
     t.line = GColorWhite;
     t.grid = GColorDarkGray;
     t.warmer = GColorChromeYellow;
-    t.colder = GColorTiffanyBlue;
+    t.colder = GColorElectricBlue;
     t.rain = GColorPictonBlue;
     t.snow = GColorWhite;
     t.now = GColorWhite;
     t.sky_sun = GColorYellow;
-    t.sky_cloud = GColorDarkGray;
+    t.sky_cloud = GColorLightGray;
     t.sky_night = GColorOxfordBlue;
-    t.cloud_rim = GColorLightGray;
+    t.cloud_rim = GColorWhite;
     t.moon = GColorPastelYellow;
     t.wind = GColorMidnightGreen;
-    t.wind_arrow = GColorMintGreen;
+    t.wind_edge = GColorCadetBlue;
+    t.wind_arrow = GColorWhite;
     t.wind_strong = GColorChromeYellow;
   }
   return t;
@@ -544,6 +547,8 @@ static void draw_now(GContext *ctx, const Theme *t, time_t now) {
 
 static void draw_day_labels(GContext *ctx, const Theme *t) {
   GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_14);
+  // Highs and lows are bold so they hold up against the night bands and shading.
+  GFont bold = fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD);
   bool named = s_face.day_count > 1;
   int i;
   for (i = 0; i < s_face.day_count; i++) {
@@ -554,8 +559,8 @@ static void draw_day_labels(GContext *ctx, const Theme *t) {
     int span = day.span - 3;
     snprintf(max_text, sizeof(max_text), "%d", day.max_deg);
     snprintf(min_text, sizeof(min_text), "%d", day.min_deg);
-    GSize max_size = text_size(max_text, font);
-    GSize min_size = text_size(min_text, font);
+    GSize max_size = text_size(max_text, bold);
+    GSize min_size = text_size(min_text, bold);
     // With several days on screen, name each one in a quieter color; drop the name
     // if the column is too narrow for it.
     GSize name_size = GSizeZero;
@@ -572,10 +577,10 @@ static void draw_day_labels(GContext *ctx, const Theme *t) {
       draw_halo_text(ctx, t, name_text, font, x, top, name_size, t->muted);
     }
     if (max_size.w > 0 && max_x + max_size.w <= x + span) {
-      draw_halo_text(ctx, t, max_text, font, max_x, top, max_size, t->text);
+      draw_halo_text(ctx, t, max_text, bold, max_x, top, max_size, t->text);
     }
     if (min_size.w > 0 && min_size.w <= span) {
-      draw_halo_text(ctx, t, min_text, font, x, LAYOUT.plot.y + LAYOUT.plot.h - min_size.h, min_size,
+      draw_halo_text(ctx, t, min_text, bold, x, LAYOUT.plot.y + LAYOUT.plot.h - min_size.h, min_size,
                      t->text);
     }
   }
@@ -642,13 +647,16 @@ static void draw_wind(GContext *ctx, const Theme *t) {
   int px;
   graphics_context_set_antialiased(ctx, false);
   graphics_context_set_stroke_width(ctx, 1);
-  graphics_context_set_stroke_color(ctx, t->wind);
+  // The area gets a brighter top edge so its shape reads on the night bands too.
   for (px = 0; px < w; px++) {
     int h = field_at(px, &s_face.hours[0].wind_h, sizeof(FaceHour));
     if (h <= 0) continue;
     if (h > LAYOUT.wind.h) h = LAYOUT.wind.h;
-    graphics_draw_line(ctx, GPoint(LAYOUT.plot.x + px, floor_y - h),
-                       GPoint(LAYOUT.plot.x + px, floor_y - 1));
+    int x = LAYOUT.plot.x + px;
+    graphics_context_set_stroke_color(ctx, t->wind);
+    graphics_draw_line(ctx, GPoint(x, floor_y - h), GPoint(x, floor_y - 1));
+    graphics_context_set_stroke_color(ctx, t->wind_edge);
+    graphics_draw_pixel(ctx, GPoint(x, floor_y - h));
   }
 
   int step = wind_step_hours();
@@ -687,13 +695,15 @@ static void draw_precip(GContext *ctx, const Theme *t) {
     int x = LAYOUT.plot.x + column_x(i, n, w);
     int cw = column_w(i, n, w);
     if (cw >= 4) cw -= 1;
+    // A full bar stops two rows short of the lane top, leaving a gap under the wind lane.
     int rain = s_face.hours[i].rain_h;
+    if (rain > LAYOUT.precip.h - 2) rain = LAYOUT.precip.h - 2;
     int snow = s_face.hours[i].snow_h;
     if (rain > 0) fill_rect(ctx, x, base - rain, cw, rain, t->rain);
     if (snow > 0) {
       int top = base - rain;
       int y;
-      for (y = top - 2; y > top - snow - 1 && y >= LAYOUT.precip.y; y -= 3) {
+      for (y = top - 2; y > top - snow - 1 && y >= LAYOUT.precip.y + 2; y -= 3) {
         fill_rect(ctx, x + cw / 2 - 1, y, 2, 2, t->snow);
       }
     }
