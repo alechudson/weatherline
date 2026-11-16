@@ -2,14 +2,19 @@
 
 Weatherline is a watchface for Pebble Time 2 (emery) and Pebble Round 2 (gabbro). It draws an hour-by-hour forecast with the time, the place, today's steps, the battery, and the Bluetooth state.
 
-The chart is a temperature line, with an orange marker for now. Rain and snow are bars along the bottom. Cloud cover is a band across the top, with a sun where the sky is clear. Night hours are shaded. Each day is labeled with its high and low, and with its name when more than one day is shown.
+Both watches share one centered layout: the time, the current temperature, the date and place, then the chart, then steps and battery.
+
+The chart is a temperature line with an orange marker for now. The area between the line and the same hour yesterday is shaded pink where it will be warmer and blue where it will be colder, so warm and cold fronts stand out. A strip along the top shows the sky: yellow for sun, pale yellow for some cloud, gray for overcast, and navy for night. Rain and snow are bars along the bottom. Each day is labeled with its high and low, and with its name when more than one day is shown.
 
 | Time 2 | Round 2 |
 | --- | --- |
 | ![Time 2, two days](screenshots/emery-2-day.png) | ![Round 2, two days](screenshots/gabbro-2-day.png) |
 | ![Time 2, five days](screenshots/emery-5-day.png) | ![Round 2, five days](screenshots/gabbro-5-day.png) |
+| ![Time 2, light theme](screenshots/emery-2-day-light.png) | ![Round 2, light theme](screenshots/gabbro-2-day-light.png) |
 
-The top row shows today's steps and the battery. A red Bluetooth sign appears when the phone is disconnected.
+The bottom row shows today's steps and the battery. A red Bluetooth sign appears when the phone is disconnected.
+
+The face is dark by default. Building with `FACE_THEME` set to `1` in `src/c/face.c` gives the light theme shown in the last row.
 
 ## Build
 

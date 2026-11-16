@@ -1,30 +1,35 @@
 var forecast = require('./forecast');
 
+// Version 2 adds yesterday's row to each hour.
+var VERSION = 2;
+var HOUR_BYTES = 6;
+
+// Both watches use the same centered stack: time, temperature, date and place,
+// a sky strip, the chart, precipitation, then steps and battery.
 var LAYOUTS = {
   emery: {
-    steps: {x: 2, y: 0, w: 104, h: 18},
-    battery: {x: 128, y: 0, w: 70, h: 18},
-    time: {x: 2, y: 18, w: 124, h: 44},
-    temp: {x: 120, y: 22, w: 78, h: 32},
-    date: {x: 2, y: 62, w: 96, h: 18},
-    place: {x: 100, y: 62, w: 98, h: 18},
-    cloud: {x: 2, y: 82, w: 196, h: 16},
-    plot: {x: 2, y: 98, w: 196, h: 100},
-    precip: {x: 2, y: 198, w: 196, h: 28},
-    bluetooth: {x: 117, y: 9, r: 4},
+    time: {x: 0, y: 2, w: 200, h: 46},
+    temp: {x: 0, y: 46, w: 200, h: 30},
+    meta: {x: 4, y: 76, w: 192, h: 18},
+    cloud: {x: 4, y: 98, w: 192, h: 5},
+    plot: {x: 4, y: 104, w: 192, h: 88},
+    precip: {x: 4, y: 192, w: 192, h: 16},
+    steps: {x: 4, y: 210, w: 92, h: 16},
+    battery: {x: 104, y: 210, w: 92, h: 16},
+    bluetooth: {x: 100, y: 218, r: 4},
     inset: 14
   },
   gabbro: {
-    time: {x: 55, y: 34, w: 150, h: 42},
-    temp: {x: 70, y: 78, w: 120, h: 28},
-    meta: {x: 40, y: 108, w: 180, h: 16},
-    cloud: {x: 36, y: 126, w: 188, h: 14},
-    plot: {x: 36, y: 140, w: 188, h: 52},
-    precip: {x: 36, y: 192, w: 188, h: 18},
-    steps: {x: 58, y: 212, w: 72, h: 16},
-    battery: {x: 150, y: 212, w: 52, h: 16},
-    bluetooth: {x: 140, y: 220, r: 4},
-    inset: 10
+    time: {x: 55, y: 32, w: 150, h: 40},
+    temp: {x: 70, y: 72, w: 120, h: 30},
+    meta: {x: 40, y: 102, w: 180, h: 18},
+    cloud: {x: 36, y: 124, w: 188, h: 5},
+    plot: {x: 36, y: 130, w: 188, h: 62},
+    precip: {x: 36, y: 192, w: 188, h: 16},
+    steps: {x: 58, y: 210, w: 72, h: 16},
+    battery: {x: 150, y: 210, w: 52, h: 16},
+    bluetooth: {x: 140, y: 218, r: 4},
+    inset: 11
   }
 };
 
@@ -317,13 +322,24 @@ function buildFrame(forecastValue, settings, platform, nowUnix) {
   if (!selected.length) return null;
   if (selected.length > 255) return null;
 
+  // Yesterday at the same hour, for the warmer-or-colder fill. It shares the line's scale.
+  var byTime = {};
+  var i;
+  for (i = 0; i < ordered.length; i++) byTime[ordered[i].time] = ordered[i];
+  var prev = [];
+  for (i = 0; i < selected.length; i++) prev.push(byTime[selected[i].time - 86400] || null);
+
   var lo = tenths(selected[0].tempC, unit);
   var hi = lo;
-  var i;
-  for (i = 1; i < selected.length; i++) {
-    var sample = tenths(selected[i].tempC, unit);
-    if (sample < lo) lo = sample;
-    if (sample > hi) hi = sample;
+  for (i = 0; i < selected.length; i++) {
+    var samples = [selected[i].tempC];
+    if (prev[i]) samples.push(prev[i].tempC);
+    var k;
+    for (k = 0; k < samples.length; k++) {
+      var sample = tenths(samples[k], unit);
+      if (sample < lo) lo = sample;
+      if (sample > hi) hi = sample;
+    }
   }
   while (hi - lo < 10) {
     lo -= 1;
@@ -339,6 +355,7 @@ function buildFrame(forecastValue, settings, platform, nowUnix) {
     var hour = selected[i];
     hourRecs.push({
       tempY: tempY(tenths(hour.tempC, unit), lo, hi, plotH, layout.inset || 0),
+      prevY: prev[i] ? tempY(tenths(prev[i].tempC, unit), lo, hi, plotH, layout.inset || 0) : 255,
       night: hour.isDay === 1 ? 0 : 1,
       rainH: barPx(hour.rainMm, 4, 0.1, laneH),
       snowH: barPx(hour.snowCm, 1, 0.05, laneH),
@@ -389,10 +406,10 @@ function buildFrame(forecastValue, settings, platform, nowUnix) {
   }
 
   var place = forecast.clipPlace(forecastValue.place || '');
-  var size = 40 + n * 5 + dayRecs.length * 8 + suns.length * 4;
+  var size = 40 + n * HOUR_BYTES + dayRecs.length * 8 + suns.length * 4;
   var bytes = new Uint8Array(size);
   var o = 0;
-  o = putU8(bytes, o, 1);
+  o = putU8(bytes, o, VERSION);
   o = putU8(bytes, o, platform === 'gabbro' ? 2 : 1);
   o = putU8(bytes, o, unit === 'C' ? 2 : 1);
   o = putU8(bytes, o, n);
@@ -413,6 +430,7 @@ function buildFrame(forecastValue, settings, platform, nowUnix) {
     o = putU8(bytes, o, rec.rainH);
     o = putU8(bytes, o, rec.snowH);
     o = putU8(bytes, o, rec.cloudH);
+    o = putU8(bytes, o, rec.prevY);
   }
   for (g = 0; g < dayRecs.length; g++) {
     var day = dayRecs[g];
@@ -435,11 +453,11 @@ function buildFrame(forecastValue, settings, platform, nowUnix) {
 
 function unpackFrame(bytes) {
   if (!bytes || bytes.length < 40) return null;
-  if (bytes[0] !== 1) return null;
+  if (bytes[0] !== VERSION) return null;
   var hourCount = bytes[3];
   var dayCount = bytes[22];
   var sunCount = bytes[23];
-  var expect = 40 + hourCount * 5 + dayCount * 8 + sunCount * 4;
+  var expect = 40 + hourCount * HOUR_BYTES + dayCount * 8 + sunCount * 4;
   if (bytes.length !== expect) return null;
 
   var hours = [];
@@ -451,9 +469,10 @@ function unpackFrame(bytes) {
       night: bytes[o + 1],
       rainH: bytes[o + 2],
       snowH: bytes[o + 3],
-      cloudH: bytes[o + 4]
+      cloudH: bytes[o + 4],
+      prevY: bytes[o + 5]
     });
-    o += 5;
+    o += HOUR_BYTES;
   }
   var days = [];
   var d;

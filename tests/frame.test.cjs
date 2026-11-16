@@ -107,7 +107,7 @@ test('unpackFrame matches hour count, current, and place, and a flipped version 
   assert.equal(unpacked.place, 'Creek');
   bytes[0] = 9;
   assert.equal(frame.unpackFrame(bytes), null);
-  bytes[0] = 1;
+  bytes[0] = 2;
   assert.equal(frame.unpackFrame(bytes.subarray(0, bytes.length - 1)), null);
 });
 
