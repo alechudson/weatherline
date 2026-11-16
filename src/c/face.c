@@ -202,12 +202,17 @@ static void draw_suns(GContext *ctx) {
     int cx = LAYOUT.cloud.x + s_face.suns[i].x;
     int cy = LAYOUT.cloud.y + s_face.suns[i].y;
     if (r <= 0) continue;
+    // Rays stop at the edge of the cloud lane so they never reach the date row.
+    int ray = LAYOUT.cloud.h / 2 - r;
+    if (ray > r) ray = r;
     graphics_fill_circle(ctx, GPoint(cx, cy), (uint16_t)r);
-    // A ray from the center sits inside the filled disk.
-    graphics_draw_line(ctx, GPoint(cx, cy - r), GPoint(cx, cy - 2 * r));
-    graphics_draw_line(ctx, GPoint(cx, cy + r), GPoint(cx, cy + 2 * r));
-    graphics_draw_line(ctx, GPoint(cx - r, cy), GPoint(cx - 2 * r, cy));
-    graphics_draw_line(ctx, GPoint(cx + r, cy), GPoint(cx + 2 * r, cy));
+    if (ray < 2) continue;
+    int a = r + 1;
+    int b = r + ray;
+    graphics_draw_line(ctx, GPoint(cx, cy - a), GPoint(cx, cy - b));
+    graphics_draw_line(ctx, GPoint(cx, cy + a), GPoint(cx, cy + b));
+    graphics_draw_line(ctx, GPoint(cx - a, cy), GPoint(cx - b, cy));
+    graphics_draw_line(ctx, GPoint(cx + a, cy), GPoint(cx + b, cy));
   }
 }
 
@@ -238,13 +243,47 @@ static void draw_now(GContext *ctx, time_t now) {
   int64_t elapsed = now64 - (int64_t)s_face.window_start;
   int64_t span = (int64_t)s_face.window_end - (int64_t)s_face.window_start;
   int x = LAYOUT.plot.x + (int)((elapsed * LAYOUT.plot.w) / span);
-  vline(ctx, x, LAYOUT.plot.y, LAYOUT.plot.h, GColorSunsetOrange);
+  fill_rect(ctx, x, LAYOUT.plot.y, 2, LAYOUT.plot.h, GColorSunsetOrange);
+
+  // A dot marks where the temperature line is now, between the two nearest hour centers.
+  int n = s_face.hour_count;
+  if (n < 1) return;
+  int px = x - LAYOUT.plot.x;
+  int i = 0;
+  while (i < n - 1) {
+    int next_mid = column_x(i + 1, n, LAYOUT.plot.w) + column_w(i + 1, n, LAYOUT.plot.w) / 2;
+    if (px < next_mid) break;
+    i += 1;
+  }
+  int mid = column_x(i, n, LAYOUT.plot.w) + column_w(i, n, LAYOUT.plot.w) / 2;
+  int y = s_face.hours[i].temp_y;
+  if (i < n - 1 && px > mid) {
+    int next_mid = column_x(i + 1, n, LAYOUT.plot.w) + column_w(i + 1, n, LAYOUT.plot.w) / 2;
+    int dy = s_face.hours[i + 1].temp_y - y;
+    if (next_mid > mid) y += (dy * (px - mid)) / (next_mid - mid);
+  }
+  graphics_context_set_antialiased(ctx, true);
+  graphics_context_set_fill_color(ctx, GColorBlack);
+  graphics_fill_circle(ctx, GPoint(x, LAYOUT.plot.y + y), 5);
+  graphics_context_set_fill_color(ctx, GColorSunsetOrange);
+  graphics_fill_circle(ctx, GPoint(x, LAYOUT.plot.y + y), 3);
 }
 
+static GSize text_size(const char *text, GFont font) {
+  return graphics_text_layout_get_content_size(
+      text, font, GRect(0, 0, 120, 30), GTextOverflowModeWordWrap, GTextAlignmentLeft);
+}
+
+// A one-pixel black outline keeps labels readable over the line and the night shading.
 static void draw_shadow_text(GContext *ctx, const char *text, GFont font, int x, int y, GSize size) {
+  static const int8_t OFFSETS[4][2] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+  int k;
   graphics_context_set_text_color(ctx, GColorBlack);
-  graphics_draw_text(ctx, text, font, GRect(x - 1, y, size.w, size.h),
-                     GTextOverflowModeFill, GTextAlignmentLeft, NULL);
+  for (k = 0; k < 4; k++) {
+    graphics_draw_text(ctx, text, font,
+                       GRect(x + OFFSETS[k][0], y + OFFSETS[k][1], size.w, size.h),
+                       GTextOverflowModeFill, GTextAlignmentLeft, NULL);
+  }
   graphics_context_set_text_color(ctx, GColorWhite);
   graphics_draw_text(ctx, text, font, GRect(x, y, size.w, size.h),
                      GTextOverflowModeFill, GTextAlignmentLeft, NULL);
@@ -252,22 +291,31 @@ static void draw_shadow_text(GContext *ctx, const char *text, GFont font, int x,
 
 static void draw_day_labels(GContext *ctx) {
   GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_14);
+  bool named = s_face.day_count > 1;
   int i;
   for (i = 0; i < s_face.day_count; i++) {
     FaceDay day = s_face.days[i];
-    char max_text[8];
+    char max_text[12];
     char min_text[8];
-    snprintf(max_text, sizeof(max_text), "%d", day.max_deg);
-    snprintf(min_text, sizeof(min_text), "%d", day.min_deg);
-    GSize max_size = graphics_text_layout_get_content_size(
-        max_text, font, GRect(0, 0, 80, 30), GTextOverflowModeWordWrap, GTextAlignmentLeft);
-    GSize min_size = graphics_text_layout_get_content_size(
-        min_text, font, GRect(0, 0, 80, 30), GTextOverflowModeWordWrap, GTextAlignmentLeft);
-    int x = LAYOUT.plot.x + day.x;
-    if (max_size.w > 0 && max_size.w <= day.span) {
-      draw_shadow_text(ctx, max_text, font, x, LAYOUT.plot.y, max_size);
+    int span = day.span - 2;
+    // With several days on screen, name each one; drop the name if the column is too narrow.
+    const char *wday = (named && day.wday <= 6) ? WEEKDAYS[day.wday] : NULL;
+    GSize max_size = GSizeZero;
+    if (wday) {
+      snprintf(max_text, sizeof(max_text), "%s %d", wday, day.max_deg);
+      max_size = text_size(max_text, font);
     }
-    if (min_size.w > 0 && min_size.w <= day.span) {
+    if (!wday || max_size.w > span) {
+      snprintf(max_text, sizeof(max_text), "%d", day.max_deg);
+      max_size = text_size(max_text, font);
+    }
+    snprintf(min_text, sizeof(min_text), "%d", day.min_deg);
+    GSize min_size = text_size(min_text, font);
+    int x = LAYOUT.plot.x + day.x + 2;
+    if (max_size.w > 0 && max_size.w <= span) {
+      draw_shadow_text(ctx, max_text, font, x, LAYOUT.plot.y - 3, max_size);
+    }
+    if (min_size.w > 0 && min_size.w <= span) {
       int y = LAYOUT.plot.y + LAYOUT.plot.h - min_size.h;
       draw_shadow_text(ctx, min_text, font, x, y, min_size);
     }
@@ -281,6 +329,7 @@ static void draw_hour_labels(GContext *ctx) {
 #else
   if (s_face.hour_count == 0 || s_face.hour_count > 24) return;
   GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_14);
+  bool h24 = clock_is_24h_style();
   int n = s_face.hour_count;
   int plot_w = LAYOUT.plot.w;
   int i;
@@ -289,17 +338,19 @@ static void draw_hour_labels(GContext *ctx) {
     if (seconds < 0) continue;
     int hour = seconds / 3600;
     if (hour != 6 && hour != 12 && hour != 18) continue;
-    char text[4];
-    snprintf(text, sizeof(text), "%d", hour);
+    char text[6];
+    if (h24) {
+      snprintf(text, sizeof(text), "%d", hour);
+    } else {
+      snprintf(text, sizeof(text), "%d%s", hour == 12 ? 12 : hour % 12, hour < 12 ? "a" : "p");
+    }
     GSize size = graphics_text_layout_get_content_size(
         text, font, GRect(0, 0, 40, 24), GTextOverflowModeWordWrap, GTextAlignmentLeft);
     int col_x = LAYOUT.plot.x + column_x(i, n, plot_w);
     int col_w = column_w(i, n, plot_w);
     int x = col_x + col_w / 2 - size.w / 2;
     int y = LAYOUT.plot.y + LAYOUT.plot.h - size.h;
-    graphics_context_set_text_color(ctx, GColorWhite);
-    graphics_draw_text(ctx, text, font, GRect(x, y, size.w, size.h),
-                       GTextOverflowModeFill, GTextAlignmentLeft, NULL);
+    draw_shadow_text(ctx, text, font, x, y, size);
   }
 #endif
 }
@@ -321,13 +372,17 @@ static void draw_chart(GContext *ctx, time_t now) {
     int x = LAYOUT.plot.x + column_x(i, n, plot_w);
     vline(ctx, x, LAYOUT.plot.y, LAYOUT.plot.h, GColorLightGray);
   }
+  // Cloud cover grows out from the middle of its lane, so a thicker band reads as more cloud.
   for (i = 0; i < n; i++) {
     int h = s_face.hours[i].cloud_h;
     if (h <= 0) continue;
     int x = LAYOUT.plot.x + column_x(i, n, plot_w);
     int w = column_w(i, n, plot_w);
-    fill_rect(ctx, x, LAYOUT.cloud.y, w, h, GColorLightGray);
+    int y = LAYOUT.cloud.y + (LAYOUT.cloud.h - h) / 2;
+    fill_rect(ctx, x, y, w, h, h * 2 > LAYOUT.cloud.h ? GColorLightGray : GColorDarkGray);
   }
+  fill_rect(ctx, LAYOUT.precip.x, LAYOUT.precip.y + LAYOUT.precip.h - 1, LAYOUT.precip.w, 1,
+            GColorDarkGray);
   draw_suns(ctx);
   draw_temperature(ctx);
   draw_now(ctx, now);
@@ -345,6 +400,18 @@ static void draw_chart(GContext *ctx, time_t now) {
       fill_rect(ctx, x, LAYOUT.precip.y, w, snow, GColorWhite);
     }
   }
+}
+
+static void draw_fitted(GContext *ctx, const char *text, GFont font, GRect box,
+                        GTextAlignment align, GColor color);
+
+static void draw_waiting(GContext *ctx) {
+  GRect box = GRect(LAYOUT.plot.x, LAYOUT.plot.y, LAYOUT.plot.w, LAYOUT.plot.h);
+  graphics_context_set_text_color(ctx, GColorLightGray);
+  graphics_draw_text(ctx, "Waiting for the forecast from your phone",
+                     fonts_get_system_font(FONT_KEY_GOTHIC_18),
+                     GRect(box.origin.x + 16, box.origin.y + box.size.h / 2 - 22, box.size.w - 32, 44),
+                     GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 }
 
 static void draw_fitted(GContext *ctx, const char *text, GFont font, GRect box,
@@ -406,12 +473,14 @@ static bool forecast_stale(time_t now) {
 
 static void draw_temp(GContext *ctx, time_t now) {
   char text[16];
+  // An old forecast turns the temperature gray instead of hiding it.
+  GColor color = GColorWhite;
   if (!s_face.ok || s_face.current_deg == -32768) {
     snprintf(text, sizeof(text), "--\xc2\xb0");
-  } else if (forecast_stale(now)) {
-    snprintf(text, sizeof(text), "%d\xc2\xb0!", s_face.current_deg);
+    color = GColorLightGray;
   } else {
     snprintf(text, sizeof(text), "%d\xc2\xb0", s_face.current_deg);
+    if (forecast_stale(now)) color = GColorLightGray;
   }
 #if defined(PBL_ROUND)
   GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
@@ -421,7 +490,7 @@ static void draw_temp(GContext *ctx, time_t now) {
   GTextAlignment align = GTextAlignmentRight;
 #endif
   draw_fitted(ctx, text, font, GRect(LAYOUT.temp.x, LAYOUT.temp.y, LAYOUT.temp.w, LAYOUT.temp.h),
-              align, GColorWhite);
+              align, color);
 }
 
 static void draw_date_place(GContext *ctx, struct tm *local) {
@@ -482,44 +551,71 @@ static void draw_steps(GContext *ctx) {
   if ((mask & HealthServiceAccessibilityMaskAvailable) == 0) return;
   HealthValue steps = health_service_sum_today(HealthMetricStepCount);
   if (steps < 0) return;
-  char text[16];
-  format_grouped(text, (int)steps);
+  char number[16];
+  char text[24];
+  format_grouped(number, (int)steps);
+  GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_14);
+  // Say what the number is when there is room for it.
+  snprintf(text, sizeof(text), "%s steps", number);
+  if (text_size(text, font).w > LAYOUT.steps.w) snprintf(text, sizeof(text), "%s", number);
 #if defined(PBL_ROUND)
   GTextAlignment align = GTextAlignmentCenter;
 #else
   GTextAlignment align = GTextAlignmentLeft;
 #endif
-  draw_fitted(ctx, text, fonts_get_system_font(FONT_KEY_GOTHIC_14),
+  draw_fitted(ctx, text, font,
               GRect(LAYOUT.steps.x, LAYOUT.steps.y, LAYOUT.steps.w, LAYOUT.steps.h),
-              align, GColorWhite);
+              align, GColorLightGray);
 }
+
+#define BATTERY_W 17
+#define BATTERY_H 9
 
 static void draw_battery(GContext *ctx) {
   BatteryChargeState charge = battery_state_service_peek();
+  bool low = charge.charge_percent <= 20 && !charge.is_charging;
+  GColor color = low ? GColorRed : GColorLightGray;
+  GColor level = charge.is_charging ? GColorGreen : (low ? GColorRed : GColorWhite);
   char text[8];
-  snprintf(text, sizeof(text), "%u%s", (unsigned)charge.charge_percent, charge.is_charging ? "+" : "");
-  GColor color = charge.charge_percent <= 20 ? GColorRed : GColorWhite;
+  snprintf(text, sizeof(text), "%u%%", (unsigned)charge.charge_percent);
+  GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_14);
+  GSize size = text_size(text, font);
+  int gap = 3;
+  int total = BATTERY_W + 2 + gap + size.w;
 #if defined(PBL_ROUND)
-  GTextAlignment align = GTextAlignmentCenter;
+  int x = LAYOUT.battery.x + (LAYOUT.battery.w - total) / 2;
 #else
-  GTextAlignment align = GTextAlignmentRight;
+  int x = LAYOUT.battery.x + LAYOUT.battery.w - total;
 #endif
-  draw_fitted(ctx, text, fonts_get_system_font(FONT_KEY_GOTHIC_14),
-              GRect(LAYOUT.battery.x, LAYOUT.battery.y, LAYOUT.battery.w, LAYOUT.battery.h),
-              align, color);
+  int y = LAYOUT.battery.y + (LAYOUT.battery.h - BATTERY_H) / 2 + 1;
+  graphics_context_set_antialiased(ctx, false);
+  graphics_context_set_stroke_width(ctx, 1);
+  graphics_context_set_stroke_color(ctx, color);
+  graphics_draw_rect(ctx, GRect(x, y, BATTERY_W, BATTERY_H));
+  fill_rect(ctx, x + BATTERY_W, y + 2, 2, BATTERY_H - 4, color);
+  int fill = ((BATTERY_W - 4) * charge.charge_percent + 50) / 100;
+  if (fill < 1) fill = 1;
+  fill_rect(ctx, x + 2, y + 2, fill, BATTERY_H - 4, level);
+  graphics_context_set_text_color(ctx, color);
+  graphics_draw_text(ctx, text, font,
+                     GRect(x + BATTERY_W + 2 + gap, LAYOUT.battery.y - 1, size.w, LAYOUT.battery.h),
+                     GTextOverflowModeFill, GTextAlignmentLeft, NULL);
 }
 
+// Nothing shows while the phone is connected; a red Bluetooth rune shows when it is not.
 static void draw_bluetooth(GContext *ctx) {
-  GPoint center = GPoint(LAYOUT.bt_x, LAYOUT.bt_y);
-  graphics_context_set_antialiased(ctx, true);
+  if (bluetooth_connection_service_peek()) return;
+  int x = LAYOUT.bt_x;
+  int y = LAYOUT.bt_y;
+  int h = LAYOUT.bt_r + 2;
+  graphics_context_set_antialiased(ctx, false);
   graphics_context_set_stroke_width(ctx, 1);
-  if (bluetooth_connection_service_peek()) {
-    graphics_context_set_fill_color(ctx, GColorWhite);
-    graphics_fill_circle(ctx, center, (uint16_t)LAYOUT.bt_r);
-  } else {
-    graphics_context_set_stroke_color(ctx, GColorRed);
-    graphics_draw_circle(ctx, center, (uint16_t)LAYOUT.bt_r);
-  }
+  graphics_context_set_stroke_color(ctx, GColorRed);
+  graphics_draw_line(ctx, GPoint(x, y - h), GPoint(x, y + h));
+  graphics_draw_line(ctx, GPoint(x, y - h), GPoint(x + h / 2 + 1, y - h / 2));
+  graphics_draw_line(ctx, GPoint(x + h / 2 + 1, y - h / 2), GPoint(x - h / 2 - 1, y + h / 2));
+  graphics_draw_line(ctx, GPoint(x, y + h), GPoint(x + h / 2 + 1, y + h / 2));
+  graphics_draw_line(ctx, GPoint(x + h / 2 + 1, y + h / 2), GPoint(x - h / 2 - 1, y - h / 2));
 }
 
 void face_paint(Layer *layer, GContext *ctx) {
@@ -527,7 +623,11 @@ void face_paint(Layer *layer, GContext *ctx) {
   fill_rect(ctx, bounds.origin.x, bounds.origin.y, bounds.size.w, bounds.size.h, GColorBlack);
   time_t now = time(NULL);
   struct tm local = *localtime(&now);
-  if (s_face.ok) draw_chart(ctx, now);
+  if (s_face.ok) {
+    draw_chart(ctx, now);
+  } else {
+    draw_waiting(ctx);
+  }
   draw_time(ctx, &local);
   draw_temp(ctx, now);
   draw_date_place(ctx, &local);

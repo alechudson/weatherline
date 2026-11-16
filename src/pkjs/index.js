@@ -10,6 +10,10 @@ var inflight = false;
 var attempts = 0;
 var retryTimer = null;
 var refreshTimer = null;
+var busySince = 0;
+
+var PLATFORM_KEY = 'weatherline.platform';
+var PLATFORM_CODES = {1: 'emery', 2: 'gabbro'};
 
 function isNum(value) {
   return typeof value === 'number' && isFinite(value);
@@ -24,15 +28,18 @@ function watchPlatform() {
   try {
     info = Pebble.getActiveWatchInfo();
   } catch (e) {
-    return null;
+    info = null;
   }
-  if (!info) return null;
-  var platform = info.platform ? String(info.platform).toLowerCase() : '';
-  if (platform === 'emery' || platform === 'gabbro') return platform;
-  var model = info.model ? String(info.model).toLowerCase() : '';
-  if (model.indexOf('gabbro') >= 0) return 'gabbro';
-  if (model.indexOf('emery') >= 0) return 'emery';
-  return null;
+  if (info) {
+    var platform = info.platform ? String(info.platform).toLowerCase() : '';
+    if (platform === 'emery' || platform === 'gabbro') return platform;
+    var model = info.model ? String(info.model).toLowerCase() : '';
+    if (model.indexOf('gabbro') >= 0) return 'gabbro';
+    if (model.indexOf('emery') >= 0) return 'emery';
+  }
+  // The watch names its own platform when it asks for a refresh.
+  var told = localStorage.getItem(PLATFORM_KEY);
+  return told === 'emery' || told === 'gabbro' ? told : null;
 }
 
 function geolocate(highAccuracy) {
@@ -123,6 +130,7 @@ function armRefresh() {
 
 function finish(gen) {
   if (gen !== generation) return;
+  busySince = 0;
   armRefresh();
 }
 
@@ -197,6 +205,7 @@ function fetchForecast(fix, gen) {
 
 function cycle() {
   var gen = ++generation;
+  busySince = Date.now();
   var st = settings.readSettings(localStorage);
   var cached = forecast.readCache(localStorage);
   sendForecast(cached);
@@ -217,8 +226,22 @@ function cycle() {
   });
 }
 
+// A refresh already under way answers the request; one stuck for two minutes is replaced.
+function busy() {
+  return busySince > 0 && Date.now() - busySince < 120000;
+}
+
 Pebble.addEventListener('ready', function() {
   cycle();
+});
+
+Pebble.addEventListener('appmessage', function(e) {
+  var payload = (e && e.payload) || {};
+  var code = payload.REQUEST;
+  if (code === undefined) code = payload[messageKeys.REQUEST];
+  if (code === undefined) return;
+  if (PLATFORM_CODES[code]) localStorage.setItem(PLATFORM_KEY, PLATFORM_CODES[code]);
+  if (!busy()) cycle();
 });
 
 Pebble.addEventListener('showConfiguration', function() {
@@ -228,7 +251,8 @@ Pebble.addEventListener('showConfiguration', function() {
 Pebble.addEventListener('webviewclosed', function(e) {
   var stored = settings.applyConfig(localStorage, e && e.response);
   if (!stored) return;
-  generation += 1;
+  // Redraw the stored forecast with the new settings. A refresh in flight keeps going
+  // and re-arms the timer with the new interval when it ends.
   sendForecast(forecast.readCache(localStorage));
-  armRefresh();
+  if (!busy()) armRefresh();
 });

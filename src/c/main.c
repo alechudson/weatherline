@@ -7,9 +7,22 @@ static void redraw(void) {
   if (s_layer) layer_mark_dirty(s_layer);
 }
 
+// The watch asks the phone for a refresh on its own schedule, because the phone
+// may stop the Pebble app's script in the background and never wake its own timer.
+static void request_refresh(void) {
+  DictionaryIterator *out;
+  if (app_message_outbox_begin(&out) != APP_MSG_OK) return;
+#if defined(PBL_ROUND)
+  dict_write_uint8(out, MESSAGE_KEY_REQUEST, 2);
+#else
+  dict_write_uint8(out, MESSAGE_KEY_REQUEST, 1);
+#endif
+  app_message_outbox_send();
+}
+
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
-  (void)tick_time;
   (void)units_changed;
+  if (tick_time->tm_min % 30 == 0) request_refresh();
   redraw();
 }
 
@@ -19,7 +32,7 @@ static void battery_handler(BatteryChargeState charge) {
 }
 
 static void bluetooth_handler(bool connected) {
-  (void)connected;
+  if (connected) request_refresh();
   redraw();
 }
 
@@ -41,7 +54,6 @@ static void init(void) {
   app_message_register_inbox_received(inbox_received);
   uint32_t inbox = app_message_inbox_size_maximum();
   app_message_open(inbox, 64);
-  APP_LOG(APP_LOG_LEVEL_INFO, "inbox %lu", (unsigned long)inbox);
 
   face_load();
 

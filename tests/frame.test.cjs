@@ -68,7 +68,8 @@ test('rain and snow bar heights follow the lane rules', function() {
     var lane = frame.layouts[platform].precip.h;
     assert.equal(unpacked.hours[0].rainH, lane);
     assert.equal(unpacked.hours[1].rainH, 0);
-    assert.equal(unpacked.hours[2].rainH, 1);
+    assert.ok(unpacked.hours[2].rainH >= 3, "a drizzle stays visible");
+    assert.ok(unpacked.hours[2].rainH < unpacked.hours[4].rainH);
     assert.equal(unpacked.hours[3].snowH, lane);
     assert.equal(unpacked.hours[3].rainH, 0);
     assert.ok(unpacked.hours[4].rainH > 0);

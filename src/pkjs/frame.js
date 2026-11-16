@@ -2,7 +2,7 @@ var forecast = require('./forecast');
 
 var LAYOUTS = {
   emery: {
-    steps: {x: 18, y: 0, w: 110, h: 18},
+    steps: {x: 2, y: 0, w: 104, h: 18},
     battery: {x: 128, y: 0, w: 70, h: 18},
     time: {x: 2, y: 18, w: 124, h: 44},
     temp: {x: 120, y: 22, w: 78, h: 32},
@@ -11,7 +11,8 @@ var LAYOUTS = {
     cloud: {x: 2, y: 82, w: 196, h: 16},
     plot: {x: 2, y: 98, w: 196, h: 100},
     precip: {x: 2, y: 198, w: 196, h: 28},
-    bluetooth: {x: 8, y: 9, r: 4}
+    bluetooth: {x: 117, y: 9, r: 4},
+    inset: 14
   },
   gabbro: {
     time: {x: 55, y: 34, w: 150, h: 42},
@@ -22,7 +23,8 @@ var LAYOUTS = {
     precip: {x: 36, y: 192, w: 188, h: 18},
     steps: {x: 58, y: 212, w: 72, h: 16},
     battery: {x: 150, y: 212, w: 52, h: 16},
-    bluetooth: {x: 140, y: 220, r: 4}
+    bluetooth: {x: 140, y: 220, r: 4},
+    inset: 10
   }
 };
 
@@ -40,9 +42,11 @@ function tenths(celsius, unit) {
   return Math.round((celsius * 9 / 5 + 32) * 10);
 }
 
-function tempY(t, lo, hi, plotH) {
+// The line keeps `inset` rows clear at the top and bottom for the day labels.
+function tempY(t, lo, hi, plotH, inset) {
   var span = Math.max(1, hi - lo);
-  var y = Math.round((hi - t) * (plotH - 1) / span);
+  var rows = Math.max(1, plotH - 1 - 2 * inset);
+  var y = inset + Math.round((hi - t) * rows / span);
   if (y < 0) y = 0;
   if (y > plotH - 1) y = plotH - 1;
   return y;
@@ -54,10 +58,11 @@ function columnBox(i, n, plotW) {
   return {x: x, w: w};
 }
 
+// A square-root scale keeps a drizzle visible next to a downpour.
 function barPx(amount, full, floor, laneH) {
   if (!(amount >= floor)) return 0;
-  var px = Math.round(Math.min(1, amount / full) * laneH);
-  return Math.max(1, px);
+  var px = Math.round(Math.sqrt(Math.min(1, amount / full)) * laneH);
+  return Math.max(Math.min(3, laneH), px);
 }
 
 function localMidnight(unix, offset) {
@@ -320,9 +325,6 @@ function buildFrame(forecastValue, settings, platform, nowUnix) {
     if (sample < lo) lo = sample;
     if (sample > hi) hi = sample;
   }
-  var pad = Math.round((hi - lo) * 0.08);
-  lo -= pad;
-  hi += pad;
   while (hi - lo < 10) {
     lo -= 1;
     hi += 1;
@@ -336,7 +338,7 @@ function buildFrame(forecastValue, settings, platform, nowUnix) {
   for (i = 0; i < n; i++) {
     var hour = selected[i];
     hourRecs.push({
-      tempY: tempY(tenths(hour.tempC, unit), lo, hi, plotH),
+      tempY: tempY(tenths(hour.tempC, unit), lo, hi, plotH, layout.inset || 0),
       night: hour.isDay === 1 ? 0 : 1,
       rainH: barPx(hour.rainMm, 4, 0.1, laneH),
       snowH: barPx(hour.snowCm, 1, 0.05, laneH),

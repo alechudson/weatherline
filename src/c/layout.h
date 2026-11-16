@@ -43,7 +43,7 @@ static const Layout LAYOUT = {
 };
 #else
 static const Layout LAYOUT = {
-  .steps = {18, 0, 110, 18},
+  .steps = {2, 0, 104, 18},
   .battery = {128, 0, 70, 18},
   .time = {2, 18, 124, 44},
   .temp = {120, 22, 78, 32},
@@ -53,7 +53,7 @@ static const Layout LAYOUT = {
   .cloud = {2, 82, 196, 16},
   .plot = {2, 98, 196, 100},
   .precip = {2, 198, 196, 28},
-  .bt_x = 8,
+  .bt_x = 117,
   .bt_y = 9,
   .bt_r = 4,
 };
