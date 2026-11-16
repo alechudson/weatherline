@@ -1,0 +1,32 @@
+{
+  "name": "weatherline",
+  "author": "Alec Hudson",
+  "version": "1.0.0",
+  "keywords": ["pebble-app"],
+  "private": true,
+  "dependencies": {},
+  "pebble": {
+    "displayName": "Weatherline",
+    "uuid": "32195aa6-6aa4-44e6-ac62-74ee47cc4974",
+    "sdkVersion": "3",
+    "enableMultiJS": true,
+    "targetPlatforms": ["emery", "gabbro"],
+    "watchapp": {
+      "watchface": true
+    },
+    "capabilities": ["configurable", "location", "health"],
+    "messageKeys": ["PAYLOAD"],
+    "usesPermissions": [
+      "Location",
+      {
+        "name": "Internet",
+        "parameters": {
+          "domains": ["api.open-meteo.com", "api.bigdatacloud.net"]
+        }
+      }
+    ],
+    "resources": {
+      "media": []
+    }
+  }
+}
