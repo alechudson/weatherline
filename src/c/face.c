@@ -2,7 +2,7 @@
 #include "layout.h"
 
 #define FACE_VERSION 3
-#define FACE_HOUR_BYTES 8
+#define FACE_HOUR_BYTES 10
 #define FACE_DAY_BYTES 8
 #define FACE_MAX_HOURS 144
 #define FACE_MAX_DAYS 6
@@ -13,6 +13,8 @@
 #define FACE_DATA_KEY 2
 #define FACE_NO_ROW 255
 #define FACE_NO_DIR 255
+#define FACE_NO_SPEED 255
+#define FACE_NO_DEG -32768
 
 // The unit byte in the frame header carries this flag when the light theme is chosen.
 #define FACE_LIGHT_FLAG 0x10
@@ -32,6 +34,8 @@ typedef struct {
   uint8_t prev_y;
   uint8_t wind_h;
   uint8_t wind_dir;
+  int8_t deg;
+  uint8_t wind_speed;
 } FaceHour;
 
 typedef struct {
@@ -46,6 +50,7 @@ typedef struct {
 typedef struct {
   bool ok;
   bool light;
+  bool metric;
   uint8_t hour_count;
   uint8_t day_count;
   uint32_t fetched_at;
@@ -172,6 +177,7 @@ static bool unpack(Face *face, const uint8_t *data, int len) {
 
   face->ok = true;
   face->light = (data[2] & FACE_LIGHT_FLAG) != 0;
+  face->metric = (data[2] & 0x0F) == 2;
   face->hour_count = hour_count;
   face->day_count = day_count;
   face->fetched_at = read_u32(data + 4);
@@ -193,6 +199,8 @@ static bool unpack(Face *face, const uint8_t *data, int len) {
     face->hours[i].prev_y = p[5];
     face->hours[i].wind_h = p[6];
     face->hours[i].wind_dir = p[7];
+    face->hours[i].deg = (int8_t)p[8];
+    face->hours[i].wind_speed = p[9];
     p += FACE_HOUR_BYTES;
   }
   for (i = 0; i < day_count; i++) {
@@ -787,11 +795,32 @@ static void draw_time(GContext *ctx, const Theme *t, struct tm *local) {
   }
 }
 
-static bool forecast_stale(time_t now) {
+// The hour of the forecast that contains now, or -1 when now is outside the window.
+static int hour_now(time_t now) {
+  int64_t now64 = (int64_t)now;
+  int64_t start = (int64_t)s_face.window_start;
+  if (!s_face.ok || s_face.hour_count == 0 || now64 < start) return -1;
+  int64_t i = (now64 - start) / 3600;
+  return i < s_face.hour_count ? (int)i : -1;
+}
+
+static bool reading_fresh(time_t now) {
   int64_t now64 = (int64_t)now;
   int64_t fetched = (int64_t)s_face.fetched_at;
-  if (now64 <= fetched) return false;
-  return (now64 - fetched) > 7200;
+  return now64 >= fetched - 600 && now64 - fetched <= 3600;
+}
+
+// The temperature to show now: the phone's reading while it is under an hour old, then the
+// forecast for the current hour, so the face stays right when the phone stops refreshing.
+// Only when now has run past the whole forecast is the old reading shown, grayed.
+static int temp_now(time_t now, bool *stale) {
+  *stale = false;
+  if (!s_face.ok) return FACE_NO_DEG;
+  if (s_face.current_deg != FACE_NO_DEG && reading_fresh(now)) return s_face.current_deg;
+  int i = hour_now(now);
+  if (i >= 0) return s_face.hours[i].deg;
+  *stale = true;
+  return s_face.current_deg;
 }
 
 // One line under the time: the temperature in bold, then the date and place. The place
@@ -800,15 +829,17 @@ static void draw_meta(GContext *ctx, const Theme *t, struct tm *local, time_t no
   char temp[16];
   // An old forecast turns the temperature gray instead of hiding it.
   GColor temp_color = t->text;
-  if (!s_face.ok || s_face.current_deg == -32768) {
+  bool stale;
+  int deg = temp_now(now, &stale);
+  if (deg == FACE_NO_DEG) {
     snprintf(temp, sizeof(temp), "--\xc2\xb0");
     temp_color = t->muted;
   } else {
-    snprintf(temp, sizeof(temp), "%d\xc2\xb0", s_face.current_deg);
-    if (forecast_stale(now)) temp_color = t->muted;
+    snprintf(temp, sizeof(temp), "%d\xc2\xb0", deg);
+    if (stale) temp_color = t->muted;
   }
   const char *wday = (local->tm_wday >= 0 && local->tm_wday <= 6) ? WEEKDAYS[local->tm_wday] : "";
-  char meta[40];
+  char meta[64];
   GFont temp_font = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
   GFont meta_font = fonts_get_system_font(FONT_KEY_GOTHIC_18);
   GSize temp_size = text_size(temp, temp_font);
@@ -852,6 +883,35 @@ static void format_grouped(char *out, int value) {
       group = 0;
     }
   }
+}
+
+// The current hour's wind: an arrow the way it blows and the speed, with the unit when it fits.
+static void draw_wind_now(GContext *ctx, const Theme *t, time_t now) {
+  int i = hour_now(now);
+  if (i < 0) return;
+  FaceHour hour = s_face.hours[i];
+  if (hour.wind_speed == FACE_NO_SPEED) return;
+  GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_14);
+  char text[16];
+  snprintf(text, sizeof(text), "%d %s", hour.wind_speed, s_face.metric ? "km/h" : "mph");
+  bool arrow = hour.wind_dir != FACE_NO_DIR && hour.wind_speed > 0;
+  int arrow_w = arrow ? 11 : 0;
+  GSize size = text_size(text, font);
+  if (arrow_w + size.w > LAYOUT.windnow.w - 6) {
+    snprintf(text, sizeof(text), "%d", hour.wind_speed);
+    size = text_size(text, font);
+  }
+  int x = LAYOUT.windnow.x + (LAYOUT.windnow.w - arrow_w - size.w) / 2;
+  if (arrow) {
+    graphics_context_set_antialiased(ctx, true);
+    graphics_context_set_stroke_width(ctx, 1);
+    bool strong = hour.wind_h * 5 >= LAYOUT.wind.h * 3;
+    graphics_context_set_stroke_color(ctx, strong ? t->wind_strong : t->muted);
+    draw_wind_arrow(ctx, x + 4, LAYOUT.windnow.y + LAYOUT.windnow.h / 2 + 1, hour.wind_dir * 2, 9);
+  }
+  draw_text(ctx, text, font,
+            GRect(x + arrow_w, LAYOUT.windnow.y - 1, size.w + 2, LAYOUT.windnow.h + 2),
+            GTextAlignmentLeft, t->muted);
 }
 
 static void draw_steps(GContext *ctx, const Theme *t) {
@@ -935,5 +995,6 @@ void face_paint(Layer *layer, GContext *ctx) {
   draw_meta(ctx, &t, &local, now);
   draw_steps(ctx, &t);
   draw_battery(ctx, &t);
+  draw_wind_now(ctx, &t, now);
   draw_bluetooth(ctx);
 }

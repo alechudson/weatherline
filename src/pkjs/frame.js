@@ -1,8 +1,11 @@
 var forecast = require('./forecast');
 
-// Version 2 adds yesterday's row to each hour; version 3 adds wind to each hour.
+// Version 2 adds yesterday's row to each hour; version 3 adds wind to each hour, and
+// each hour's temperature and wind speed in the chosen units so the watch can show the
+// current hour on its own when the phone has not refreshed.
 var VERSION = 3;
-var HOUR_BYTES = 8;
+var HOUR_BYTES = 10;
+var NO_SPEED = 255;
 var DAY_BYTES = 8;
 var NO_DIR = 255;
 // The wind lane is full at this speed.
@@ -19,9 +22,10 @@ var LAYOUTS = {
     plot: {x: 4, y: 96, w: 192, h: 81},
     wind: {x: 4, y: 178, w: 192, h: 14},
     precip: {x: 4, y: 193, w: 192, h: 15},
-    steps: {x: 4, y: 210, w: 92, h: 16},
-    battery: {x: 104, y: 210, w: 92, h: 16},
-    bluetooth: {x: 100, y: 218, r: 4},
+    steps: {x: 4, y: 210, w: 64, h: 16},
+    windnow: {x: 68, y: 210, w: 64, h: 16},
+    battery: {x: 132, y: 210, w: 64, h: 16},
+    bluetooth: {x: 193, y: 12, r: 4},
     inset: 14
   },
   gabbro: {
@@ -31,9 +35,10 @@ var LAYOUTS = {
     plot: {x: 36, y: 118, w: 188, h: 58},
     wind: {x: 36, y: 177, w: 188, h: 13},
     precip: {x: 36, y: 191, w: 188, h: 15},
-    steps: {x: 58, y: 210, w: 72, h: 16},
-    battery: {x: 150, y: 210, w: 52, h: 16},
-    bluetooth: {x: 140, y: 218, r: 4},
+    steps: {x: 54, y: 210, w: 52, h: 16},
+    windnow: {x: 106, y: 210, w: 48, h: 16},
+    battery: {x: 154, y: 210, w: 52, h: 16},
+    bluetooth: {x: 130, y: 16, r: 4},
     inset: 11
   }
 };
@@ -78,6 +83,17 @@ function barPx(amount, full, floor, laneH) {
 function windPx(kmh, laneH) {
   if (!isNum(kmh) || kmh <= 0) return 0;
   return Math.round(Math.min(1, kmh / WIND_FULL_KMH) * laneH);
+}
+
+// Wind speed in mph for Fahrenheit and km/h for Celsius, or NO_SPEED when unknown.
+function speedByte(kmh, unit) {
+  if (!isNum(kmh) || kmh < 0) return NO_SPEED;
+  var speed = unit === 'C' ? kmh : kmh / 1.609344;
+  return Math.min(254, Math.round(speed));
+}
+
+function degByte(celsius, unit) {
+  return Math.max(-127, Math.min(127, whole(celsius, unit)));
 }
 
 // Direction the wind comes from, in 2-degree steps.
@@ -322,7 +338,9 @@ function buildFrame(forecastValue, settings, platform, nowUnix) {
       snowH: barPx(hour.snowCm, 1, 0.05, laneH),
       cloudH: Math.round(hour.cloud / 100 * layout.cloud.h),
       windH: windPx(hour.windKmh, layout.wind.h),
-      windDir: dirByte(hour.windDir)
+      windDir: dirByte(hour.windDir),
+      deg: degByte(hour.tempC, unit),
+      windSpeed: speedByte(hour.windKmh, unit)
     });
   }
 
@@ -397,6 +415,8 @@ function buildFrame(forecastValue, settings, platform, nowUnix) {
     o = putU8(bytes, o, rec.prevY);
     o = putU8(bytes, o, rec.windH);
     o = putU8(bytes, o, rec.windDir);
+    o = putU8(bytes, o, rec.deg);
+    o = putU8(bytes, o, rec.windSpeed);
   }
   for (g = 0; g < dayRecs.length; g++) {
     var day = dayRecs[g];
@@ -431,7 +451,9 @@ function unpackFrame(bytes) {
       cloudH: bytes[o + 4],
       prevY: bytes[o + 5],
       windH: bytes[o + 6],
-      windDir: bytes[o + 7]
+      windDir: bytes[o + 7],
+      deg: bytes[o + 8] > 127 ? bytes[o + 8] - 256 : bytes[o + 8],
+      windSpeed: bytes[o + 9]
     });
     o += HOUR_BYTES;
   }

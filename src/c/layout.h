@@ -11,6 +11,7 @@ typedef struct {
 
 typedef struct {
   Rect steps;
+  Rect windnow;
   Rect battery;
   Rect time;
   Rect temp;
@@ -28,8 +29,9 @@ typedef struct {
 
 #if defined(PBL_ROUND)
 static const Layout LAYOUT = {
-  .steps = {58, 210, 72, 16},
-  .battery = {150, 210, 52, 16},
+  .steps = {54, 210, 52, 16},
+  .windnow = {106, 210, 48, 16},
+  .battery = {154, 210, 52, 16},
   .time = {60, 28, 140, 50},
   .temp = {0, 0, 0, 0},
   .date = {0, 0, 0, 0},
@@ -39,14 +41,15 @@ static const Layout LAYOUT = {
   .plot = {36, 118, 188, 58},
   .wind = {36, 177, 188, 13},
   .precip = {36, 191, 188, 15},
-  .bt_x = 140,
-  .bt_y = 218,
+  .bt_x = 130,
+  .bt_y = 16,
   .bt_r = 4,
 };
 #else
 static const Layout LAYOUT = {
-  .steps = {4, 210, 92, 16},
-  .battery = {104, 210, 92, 16},
+  .steps = {4, 210, 64, 16},
+  .windnow = {68, 210, 64, 16},
+  .battery = {132, 210, 64, 16},
   .time = {0, 3, 200, 50},
   .temp = {0, 0, 0, 0},
   .date = {0, 0, 0, 0},
@@ -56,8 +59,8 @@ static const Layout LAYOUT = {
   .plot = {4, 96, 192, 81},
   .wind = {4, 178, 192, 14},
   .precip = {4, 193, 192, 15},
-  .bt_x = 100,
-  .bt_y = 218,
+  .bt_x = 193,
+  .bt_y = 12,
   .bt_r = 4,
 };
 #endif

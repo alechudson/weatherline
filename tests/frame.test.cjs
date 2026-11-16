@@ -107,6 +107,28 @@ test('wind fills the lane at 50 km/h and keeps its direction in 2-degree steps',
   });
 });
 
+test('each hour carries its temperature and wind speed in the chosen units', function() {
+  var start = 1794722400;
+  function hour(i, tempC, kmh) {
+    return {time: start + i * 3600, tempC: tempC, rainMm: 0, snowCm: 0, cloud: 0, isDay: 1,
+      windKmh: kmh, windDir: 90};
+  }
+  var made = {
+    fetchedAt: NOW,
+    utcOffsetSeconds: -21600,
+    currentC: 20,
+    place: 'X',
+    days: [],
+    hours: [hour(0, 20, 16.09344), hour(1, -40, null), hour(2, 60, 500), hour(3, -100, 0)]
+  };
+  var f = frame.unpackFrame(frame.buildFrame(made, settings(1, 'F'), 'emery', NOW));
+  assert.deepEqual(f.hours.map(function(h) { return h.deg; }), [68, -40, 127, -127]);
+  assert.deepEqual(f.hours.map(function(h) { return h.windSpeed; }), [10, 255, 254, 0]);
+  var c = frame.unpackFrame(frame.buildFrame(made, settings(1, 'C'), 'emery', NOW));
+  assert.deepEqual(c.hours.map(function(h) { return h.deg; }), [20, -40, 60, -100]);
+  assert.equal(c.hours[0].windSpeed, 16);
+});
+
 test('a flat 20C day keeps every tempY on one row', function() {
   var start = 1794722400;
   var hours = [];
