@@ -2,6 +2,7 @@ var forecast = require('./forecast');
 var frame = require('./frame');
 var locate = require('./locate');
 var settings = require('./settings');
+var uaprobe = require('./uaprobe');
 var messageKeys = require('message_keys');
 
 var generation = 0;
@@ -264,6 +265,10 @@ function busy() {
 
 Pebble.addEventListener('ready', function() {
   cycle(true);
+  // TEMPORARY User-Agent probe; runs after the first refresh has had time to finish.
+  setTimeout(function() {
+    uaprobe.run(function(line) { console.log(line); });
+  }, 15000);
 });
 
 // A refresh inside the interval already found the place and a fresh forecast.

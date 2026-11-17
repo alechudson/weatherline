@@ -21,7 +21,7 @@
       {
         "name": "Internet",
         "parameters": {
-          "domains": ["api.open-meteo.com", "api.bigdatacloud.net"]
+          "domains": ["api.open-meteo.com", "api.bigdatacloud.net", "api.met.no", "api.weather.gov"]
         }
       }
     ],
