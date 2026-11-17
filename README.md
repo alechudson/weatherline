@@ -2,7 +2,7 @@
 
 Weatherline is a watchface for Pebble Time 2 (emery) and Pebble Round 2 (gabbro). It draws an hour-by-hour forecast with the time, the place, today's steps, the battery, and the Bluetooth state.
 
-Both watches share one centered layout: a large time, the date and the place, then the chart, then steps, the current wind and the battery.
+Both watches share one centered layout with the time at the bottom: steps, the current wind and the battery along the top, then the chart, then the date and the place, then a large time.
 
 The line is the face. Its color follows the temperature: white when mild, tinting toward pale blue when cool and blue below freezing, and toward pale yellow when warm and apricot when hot (darker tones in the light theme; in Mono the line grows thicker as it warms instead). An apricot ring marks now, and the current temperature rides the line beside it in a small tag filled with the line's color there. The tag sits above the ring, or below or beside it when a day label is in the way.
 
@@ -19,7 +19,7 @@ The time is set in Barlow Condensed SemiBold, included under the SIL Open Font L
 | ![Time 2, light theme](screenshots/emery-2-day-light.png) | ![Round 2, light theme](screenshots/gabbro-2-day-light.png) |
 | ![Time 2, mono theme](screenshots/emery-2-day-mono.png) | ![Round 2, mono theme](screenshots/gabbro-2-day-mono.png) |
 
-The bottom row shows today's steps, the current wind with an arrow the way it blows (mph with Fahrenheit, km/h with Celsius), and the battery. A red Bluetooth sign appears at the top right (top center on Round 2) when the phone is disconnected.
+The top row shows today's steps, the current wind with an arrow the way it blows (mph with Fahrenheit, km/h with Celsius), and the battery. A red Bluetooth sign appears left of the time (top center on Round 2) when the phone is disconnected.
 
 ## Build
 

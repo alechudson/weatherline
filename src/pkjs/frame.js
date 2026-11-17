@@ -13,34 +13,34 @@ var WIND_FULL_KMH = 50;
 var LIGHT_FLAG = 0x10;
 var MONO_FLAG = 0x20;
 
-// Both watches use the same centered stack: the time, the date and place, a sky lane, the
-// chart (which carries the current temperature on its line), wind, precipitation, then
-// steps, the current wind and battery.
+// Both watches use the same centered stack, with the time at the bottom: steps, the current
+// wind and battery along the top, a sky lane, the chart (which carries the current
+// temperature on its line), wind, precipitation, the date and place, then the time.
 var LAYOUTS = {
   emery: {
-    time: {x: 0, y: 2, w: 200, h: 57},
-    meta: {x: 4, y: 61, w: 192, h: 19},
-    cloud: {x: 4, y: 82, w: 192, h: 16},
-    plot: {x: 4, y: 99, w: 192, h: 78},
-    wind: {x: 4, y: 178, w: 192, h: 14},
-    precip: {x: 4, y: 193, w: 192, h: 15},
-    steps: {x: 4, y: 210, w: 64, h: 16},
-    windnow: {x: 68, y: 210, w: 64, h: 16},
-    battery: {x: 132, y: 210, w: 64, h: 16},
-    bluetooth: {x: 193, y: 12, r: 4},
+    steps: {x: 4, y: 1, w: 64, h: 16},
+    windnow: {x: 68, y: 1, w: 64, h: 16},
+    battery: {x: 132, y: 1, w: 64, h: 16},
+    cloud: {x: 4, y: 20, w: 192, h: 16},
+    plot: {x: 4, y: 37, w: 192, h: 76},
+    wind: {x: 4, y: 114, w: 192, h: 14},
+    precip: {x: 4, y: 129, w: 192, h: 15},
+    meta: {x: 4, y: 146, w: 192, h: 19},
+    time: {x: 0, y: 165, w: 200, h: 57},
+    bluetooth: {x: 8, y: 193, r: 4},
     inset: 14
   },
   gabbro: {
-    time: {x: 60, y: 30, w: 140, h: 48},
-    meta: {x: 40, y: 80, w: 180, h: 19},
-    cloud: {x: 36, y: 101, w: 188, h: 15},
-    plot: {x: 36, y: 117, w: 188, h: 59},
-    wind: {x: 36, y: 177, w: 188, h: 13},
-    precip: {x: 36, y: 191, w: 188, h: 15},
-    steps: {x: 54, y: 210, w: 52, h: 16},
-    windnow: {x: 106, y: 210, w: 48, h: 16},
-    battery: {x: 154, y: 210, w: 52, h: 16},
-    bluetooth: {x: 130, y: 16, r: 4},
+    steps: {x: 54, y: 36, w: 52, h: 16},
+    windnow: {x: 106, y: 36, w: 48, h: 16},
+    battery: {x: 154, y: 36, w: 52, h: 16},
+    cloud: {x: 36, y: 56, w: 188, h: 15},
+    plot: {x: 36, y: 72, w: 188, h: 59},
+    wind: {x: 36, y: 132, w: 188, h: 13},
+    precip: {x: 36, y: 146, w: 188, h: 15},
+    meta: {x: 40, y: 163, w: 180, h: 19},
+    time: {x: 60, y: 183, w: 140, h: 48},
+    bluetooth: {x: 130, y: 22, r: 4},
     inset: 11
   }
 };
