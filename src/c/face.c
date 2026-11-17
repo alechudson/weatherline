@@ -89,6 +89,8 @@ static uint8_t s_blob[FACE_MAX_BYTES];
 
 static const char *WEEKDAYS[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
 
+// One palette per theme: grays for clouds and wind, a warm and a cool tone for warmer and
+// colder than yesterday, blue only for water, and a quiet band for night.
 static Theme theme(void) {
   Theme t;
   // Until the first forecast arrives, the face is dark.
@@ -98,36 +100,36 @@ static Theme theme(void) {
     t.muted = GColorDarkGray;
     t.line = GColorBlack;
     t.grid = GColorLightGray;
-    t.warmer = GColorRed;
-    t.colder = GColorVividCerulean;
-    t.rain = GColorCobaltBlue;
+    t.warmer = GColorOrange;
+    t.colder = GColorLiberty;
+    t.rain = GColorVividCerulean;
     t.snow = GColorDarkGray;
     t.now = GColorBlack;
     t.sky_cloud = GColorLightGray;
     t.sky_night = GColorCeleste;
     t.cloud_rim = GColorDarkGray;
-    t.wind = GColorMintGreen;
-    t.wind_edge = GColorMayGreen;
-    t.wind_arrow = GColorDarkGreen;
-    t.wind_strong = GColorOrange;
+    t.wind = GColorLightGray;
+    t.wind_edge = GColorDarkGray;
+    t.wind_arrow = GColorDarkGray;
+    t.wind_strong = GColorWindsorTan;
   } else {
     t.bg = GColorBlack;
     t.text = GColorWhite;
     t.muted = GColorLightGray;
     t.line = GColorWhite;
     t.grid = GColorDarkGray;
-    t.warmer = GColorSunsetOrange;
-    t.colder = GColorVividCerulean;
+    t.warmer = GColorRajah;
+    t.colder = GColorBabyBlueEyes;
     t.rain = GColorPictonBlue;
     t.snow = GColorWhite;
     t.now = GColorWhite;
     t.sky_cloud = GColorLightGray;
     t.sky_night = GColorOxfordBlue;
     t.cloud_rim = GColorWhite;
-    t.wind = GColorMidnightGreen;
-    t.wind_edge = GColorCadetBlue;
+    t.wind = GColorDarkGray;
+    t.wind_edge = GColorLightGray;
     t.wind_arrow = GColorWhite;
-    t.wind_strong = GColorChromeYellow;
+    t.wind_strong = GColorIcterine;
   }
   return t;
 }
