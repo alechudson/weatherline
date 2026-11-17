@@ -74,11 +74,9 @@ typedef struct {
   GColor rain;
   GColor snow;
   GColor now;
-  GColor sky_sun;
   GColor sky_cloud;
   GColor sky_night;
   GColor cloud_rim;
-  GColor moon;
   GColor wind;
   GColor wind_edge;
   GColor wind_arrow;
@@ -100,16 +98,14 @@ static Theme theme(void) {
     t.muted = GColorDarkGray;
     t.line = GColorBlack;
     t.grid = GColorLightGray;
-    t.warmer = GColorOrange;
-    t.colder = GColorTiffanyBlue;
+    t.warmer = GColorRed;
+    t.colder = GColorVividCerulean;
     t.rain = GColorCobaltBlue;
     t.snow = GColorDarkGray;
     t.now = GColorBlack;
-    t.sky_sun = GColorChromeYellow;
     t.sky_cloud = GColorLightGray;
     t.sky_night = GColorCeleste;
     t.cloud_rim = GColorDarkGray;
-    t.moon = GColorDarkGray;
     t.wind = GColorMintGreen;
     t.wind_edge = GColorMayGreen;
     t.wind_arrow = GColorDarkGreen;
@@ -120,16 +116,14 @@ static Theme theme(void) {
     t.muted = GColorLightGray;
     t.line = GColorWhite;
     t.grid = GColorDarkGray;
-    t.warmer = GColorChromeYellow;
-    t.colder = GColorElectricBlue;
+    t.warmer = GColorSunsetOrange;
+    t.colder = GColorVividCerulean;
     t.rain = GColorPictonBlue;
     t.snow = GColorWhite;
     t.now = GColorWhite;
-    t.sky_sun = GColorYellow;
     t.sky_cloud = GColorLightGray;
     t.sky_night = GColorOxfordBlue;
     t.cloud_rim = GColorWhite;
-    t.moon = GColorPastelYellow;
     t.wind = GColorMidnightGreen;
     t.wind_edge = GColorCadetBlue;
     t.wind_arrow = GColorWhite;
@@ -358,66 +352,6 @@ static int cloud_at(int px) {
   return field_at(px, &s_face.hours[0].cloud_h, sizeof(FaceHour));
 }
 
-// A sun: a disc with eight short rays.
-static void draw_sun(GContext *ctx, const Theme *t, int x, int y, int r, int ray) {
-  int k;
-  graphics_context_set_antialiased(ctx, true);
-  graphics_context_set_stroke_color(ctx, t->sky_sun);
-  graphics_context_set_stroke_width(ctx, 1);
-  for (k = 0; k < 8; k++) {
-    int32_t angle = TRIG_MAX_ANGLE * k / 8;
-    int32_t s = sin_lookup(angle);
-    int32_t c = cos_lookup(angle);
-    int r0 = r + 2;
-    int r1 = r + 1 + ray;
-    graphics_draw_line(ctx,
-                       GPoint(x + (int)(s * r0 / TRIG_MAX_RATIO), y - (int)(c * r0 / TRIG_MAX_RATIO)),
-                       GPoint(x + (int)(s * r1 / TRIG_MAX_RATIO), y - (int)(c * r1 / TRIG_MAX_RATIO)));
-  }
-  graphics_context_set_fill_color(ctx, t->sky_sun);
-  graphics_fill_circle(ctx, GPoint(x, y), (uint16_t)r);
-}
-
-// A crescent: a disc with a second disc in the night color taken out of its upper right.
-static void draw_moon(GContext *ctx, const Theme *t, int x, int y, int r) {
-  graphics_context_set_antialiased(ctx, true);
-  graphics_context_set_fill_color(ctx, t->moon);
-  graphics_fill_circle(ctx, GPoint(x, y), (uint16_t)r);
-  graphics_context_set_fill_color(ctx, t->sky_night);
-  graphics_fill_circle(ctx, GPoint(x + r / 2 + 1, y - r / 2), (uint16_t)r);
-}
-
-// Clear stretches of the lane get a sun by day and a moon by night, centered on the stretch.
-static void draw_sky_bodies(GContext *ctx, const Theme *t) {
-  int n = s_face.hour_count;
-  int w = LAYOUT.plot.w;
-  int lane = LAYOUT.cloud.h;
-  int cy = LAYOUT.cloud.y + lane / 2;
-  // Up to about 40% cover counts as clear enough to see the sun or moon.
-  int clear = (lane * 2) / 5;
-  int i = 0;
-  while (i < n) {
-    bool night = s_face.hours[i].night != 0;
-    if (s_face.hours[i].cloud_h > clear) {
-      i += 1;
-      continue;
-    }
-    int j = i;
-    while (j < n && (s_face.hours[j].night != 0) == night && s_face.hours[j].cloud_h <= clear) j += 1;
-    int x0 = column_x(i, n, w);
-    int x1 = column_x(j, n, w);
-    int x = LAYOUT.plot.x + (x0 + x1) / 2;
-    if (night) {
-      if (x1 - x0 >= 12) draw_moon(ctx, t, x, cy, lane / 2 - 3);
-    } else if (x1 - x0 >= 16) {
-      draw_sun(ctx, t, x, cy, lane / 4, lane / 2 - lane / 4 - 1);
-    } else if (x1 - x0 >= 8) {
-      draw_sun(ctx, t, x, cy, lane / 4, 0);
-    }
-    i = j;
-  }
-}
-
 // Clouds are a bank of puffs sitting on the lane floor. Each puff grows with the cover
 // under it, so thin cloud is a low ripple and overcast fills the lane. A one-pixel rim on
 // top of each puff gives the bank some shape.
@@ -460,8 +394,8 @@ static void draw_clouds(GContext *ctx, const Theme *t) {
   }
 }
 
+// The sky lane holds only clouds; an empty lane means a clear sky.
 static void draw_sky(GContext *ctx, const Theme *t) {
-  draw_sky_bodies(ctx, t);
   draw_clouds(ctx, t);
 }
 
