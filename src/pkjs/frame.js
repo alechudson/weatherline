@@ -13,14 +13,15 @@ var WIND_FULL_KMH = 50;
 var LIGHT_FLAG = 0x10;
 var MONO_FLAG = 0x20;
 
-// Both watches use the same centered stack: the time, one line with the temperature,
-// date and place, a sky lane, the chart, wind, precipitation, then steps and battery.
+// Both watches use the same centered stack: the time, the date and place, a sky lane, the
+// chart (which carries the current temperature on its line), wind, precipitation, then
+// steps, the current wind and battery.
 var LAYOUTS = {
   emery: {
-    time: {x: 0, y: 3, w: 200, h: 50},
-    meta: {x: 4, y: 53, w: 192, h: 24},
-    cloud: {x: 4, y: 79, w: 192, h: 16},
-    plot: {x: 4, y: 96, w: 192, h: 81},
+    time: {x: 0, y: 2, w: 200, h: 57},
+    meta: {x: 4, y: 61, w: 192, h: 19},
+    cloud: {x: 4, y: 82, w: 192, h: 16},
+    plot: {x: 4, y: 99, w: 192, h: 78},
     wind: {x: 4, y: 178, w: 192, h: 14},
     precip: {x: 4, y: 193, w: 192, h: 15},
     steps: {x: 4, y: 210, w: 64, h: 16},
@@ -30,10 +31,10 @@ var LAYOUTS = {
     inset: 14
   },
   gabbro: {
-    time: {x: 60, y: 28, w: 140, h: 50},
-    meta: {x: 40, y: 76, w: 180, h: 24},
-    cloud: {x: 36, y: 102, w: 188, h: 15},
-    plot: {x: 36, y: 118, w: 188, h: 58},
+    time: {x: 60, y: 30, w: 140, h: 48},
+    meta: {x: 40, y: 80, w: 180, h: 19},
+    cloud: {x: 36, y: 101, w: 188, h: 15},
+    plot: {x: 36, y: 117, w: 188, h: 59},
     wind: {x: 36, y: 177, w: 188, h: 13},
     precip: {x: 36, y: 191, w: 188, h: 15},
     steps: {x: 54, y: 210, w: 52, h: 16},

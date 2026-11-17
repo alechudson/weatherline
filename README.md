@@ -2,13 +2,15 @@
 
 Weatherline is a watchface for Pebble Time 2 (emery) and Pebble Round 2 (gabbro). It draws an hour-by-hour forecast with the time, the place, today's steps, the battery, and the Bluetooth state.
 
-Both watches share one centered layout: a large time, one line with the current temperature, the date and the place, then the chart, then steps, the current wind and the battery.
+Both watches share one centered layout: a large time, the date and the place, then the chart, then steps, the current wind and the battery.
 
-The temperature is the phone's latest reading while it is under an hour old. After that the watch shows the forecast for the current hour, and the current wind always comes from the forecast for the current hour, so both stay right when the phone stops refreshing in the background. The temperature turns gray only once the clock has run past the whole forecast.
+The line is the face. Its color follows the temperature: white when mild, tinting toward pale blue when cool and blue below freezing, and toward pale yellow when warm and apricot when hot (darker tones in the light theme; in Mono the line grows thicker as it warms instead). An apricot ring marks now, and the current temperature rides the line beside it in a small tag filled with the line's color there. The tag sits above the ring, or below or beside it when a day label is in the way.
 
-The chart is a temperature line with a ring marking now. The area between the line and the same hour yesterday is shaded apricot where it will be warmer and periwinkle where it will be colder (orange and indigo in the light theme), so warm and cold fronts stand out. Night hours sit on a dark blue band behind the chart. A lane along the top shows the sky as a bank of puffy clouds that grows taller with cloud cover; where the lane is empty, the sky is clear. Below the chart, a wind lane shades wind speed in gray (full at 50 km/h, about 31 mph) and places an arrow every few hours pointing the way the wind blows; arrows turn yellow at about 30 km/h (19 mph) and calm hours get a dot. Rain is a bar per hour along the bottom, taller when heavier, and snow is a stack of flakes. Each day is labeled with its high and low, and with its name when more than one day is shown.
+The temperature is the phone's latest reading while it is under an hour old. After that the watch shows the forecast for the current hour, and the current wind always comes from the forecast for the current hour, so both stay right when the phone stops refreshing in the background. When the clock runs past the whole forecast, the ring and tag go away and the last temperature joins the date line, grayed.
 
-The time is set in Inter Display SemiBold, included under the SIL Open Font License (`resources/fonts/OFL.txt`).
+The area between the line and the same hour yesterday is shaded apricot where it will be warmer and periwinkle where it will be colder (orange and indigo in the light theme), so warm and cold fronts stand out. Night hours sit on a dark blue band behind the chart that fades in and out over a few pixels at dusk and dawn. A lane along the top shows the sky as a bank of puffy clouds that grows taller with cloud cover; where the lane is empty, the sky is clear. Below the chart, a wind lane shades wind speed in gray (full at 50 km/h, about 31 mph) and places an arrow every few hours pointing the way the wind blows; arrows turn yellow at about 30 km/h (19 mph) and calm hours get a dot. Rain is a bar per hour along the bottom, taller when heavier, and snow is a stack of flakes. Each day is labeled with its high and low, and with its name when more than one day is shown.
+
+The time is set in Barlow Condensed SemiBold, included under the SIL Open Font License (`resources/fonts/OFL.txt`). AM and PM, the now ring and the settings page share one apricot accent.
 
 | Time 2 | Round 2 |
 | --- | --- |
@@ -65,7 +67,7 @@ Open the config page from the Pebble phone app. There are four settings.
 
 Changing the day count, the unit, or the theme redraws the forecast already stored on the phone. It does not download again.
 
-The phone tries a network location first, then GPS, and keeps the last fix. The watch also asks the phone for a refresh every half hour and when Bluetooth reconnects, so the forecast stays current even if the phone pauses the app in the background. If a refresh fails, the watch keeps showing the last forecast. The temperature turns gray when the forecast is more than two hours old.
+The phone tries a network location first, then GPS, and keeps the last fix. The watch also asks the phone for a refresh every half hour and when Bluetooth reconnects, so the forecast stays current even if the phone pauses the app in the background. If a refresh fails, the watch keeps showing the last forecast, and the temperature follows the forecast hour by hour until it runs out.
 
 ## Data
 

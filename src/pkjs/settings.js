@@ -46,8 +46,8 @@ var STYLE = ''
   + '.seg input{position:absolute;opacity:0;inset:0;margin:0}'
   + '.seg span{display:block;padding:10px 4px;border-left:1px solid #444}'
   + '.seg label:first-child span{border-left:0}'
-  + '.seg input:checked+span{background:#ff9a2e;color:#111;font-weight:600}'
-  + 'button{width:100%;padding:14px;border:0;border-radius:10px;background:#ff9a2e;'
+  + '.seg input:checked+span{background:#ffaa55;color:#111;font-weight:600}'
+  + 'button{width:100%;padding:14px;border:0;border-radius:10px;background:#ffaa55;'
   + 'color:#111;font:inherit;font-weight:600;margin-top:8px}'
   + '.credit{margin-top:24px;color:#777;font-size:12px}';
 

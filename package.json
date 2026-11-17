@@ -29,15 +29,15 @@
       "media": [
         {
           "type": "font",
-          "name": "FONT_TIME_64",
-          "file": "fonts/InterDisplay-SemiBold.otf",
+          "name": "FONT_TIME_80",
+          "file": "fonts/BarlowCondensed-SemiBold.ttf",
           "characterRegex": "[0-9:]",
           "targetPlatforms": ["emery"]
         },
         {
           "type": "font",
-          "name": "FONT_TIME_54",
-          "file": "fonts/InterDisplay-SemiBold.otf",
+          "name": "FONT_TIME_67",
+          "file": "fonts/BarlowCondensed-SemiBold.ttf",
           "characterRegex": "[0-9:]",
           "targetPlatforms": ["gabbro"]
         }

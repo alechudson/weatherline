@@ -70,7 +70,6 @@ typedef struct {
   GColor bg;
   GColor text;
   GColor muted;
-  GColor line;
   GColor grid;
   GColor warmer;
   GColor colder;
@@ -84,8 +83,14 @@ typedef struct {
   GColor wind_edge;
   GColor wind_arrow;
   GColor wind_strong;
-  // Mono has no hue to tell colder from warmer, so colder is drawn as stripes.
+  // The signature accent: the now marker and AM/PM.
+  GColor accent;
+  // The temperature line's color by how warm it is: freezing, cool, mild, warm and hot.
+  GColor thermal[5];
+  // Mono has no hue to tell colder from warmer, so colder is drawn as stripes, and the line
+  // grows thicker as it warms instead of changing color.
   bool striped_colder;
+  bool thermal_width;
   // Mono marks night with a thin bar under the chart instead of a band behind it.
   bool night_bar;
 } Theme;
@@ -97,10 +102,12 @@ static uint8_t s_blob[FACE_MAX_BYTES];
 static const char *WEEKDAYS[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
 
 // One palette per theme: grays for clouds and wind, a warm and a cool tone for warmer and
-// colder than yesterday, blue only for water, and a quiet band for night.
+// colder than yesterday, blue only for water, a quiet band for night, a ramp for the line
+// that tints only toward hot and freezing, and one apricot accent.
 static Theme theme(void) {
   Theme t;
   t.striped_colder = false;
+  t.thermal_width = false;
   t.night_bar = false;
   // Until the first forecast arrives, the face is dark.
   if (s_face.mono) {
@@ -109,7 +116,6 @@ static Theme theme(void) {
     t.bg = GColorBlack;
     t.text = GColorWhite;
     t.muted = GColorLightGray;
-    t.line = GColorWhite;
     t.grid = GColorDarkGray;
     t.warmer = GColorWhite;
     t.colder = GColorLightGray;
@@ -125,11 +131,17 @@ static Theme theme(void) {
     t.wind_edge = GColorLightGray;
     t.wind_arrow = GColorLightGray;
     t.wind_strong = GColorWhite;
+    t.accent = GColorWhite;
+    t.thermal[0] = GColorWhite;
+    t.thermal[1] = GColorWhite;
+    t.thermal[2] = GColorWhite;
+    t.thermal[3] = GColorWhite;
+    t.thermal[4] = GColorWhite;
+    t.thermal_width = true;
   } else if (s_face.light) {
     t.bg = GColorWhite;
     t.text = GColorBlack;
     t.muted = GColorDarkGray;
-    t.line = GColorBlack;
     t.grid = GColorLightGray;
     t.warmer = GColorOrange;
     t.colder = GColorLiberty;
@@ -143,11 +155,16 @@ static Theme theme(void) {
     t.wind_edge = GColorDarkGray;
     t.wind_arrow = GColorDarkGray;
     t.wind_strong = GColorWindsorTan;
+    t.accent = GColorOrange;
+    t.thermal[0] = GColorBlueMoon;
+    t.thermal[1] = GColorCobaltBlue;
+    t.thermal[2] = GColorBlack;
+    t.thermal[3] = GColorWindsorTan;
+    t.thermal[4] = GColorRed;
   } else {
     t.bg = GColorBlack;
     t.text = GColorWhite;
     t.muted = GColorLightGray;
-    t.line = GColorWhite;
     t.grid = GColorDarkGray;
     t.warmer = GColorRajah;
     t.colder = GColorBabyBlueEyes;
@@ -161,6 +178,13 @@ static Theme theme(void) {
     t.wind_edge = GColorLightGray;
     t.wind_arrow = GColorWhite;
     t.wind_strong = GColorIcterine;
+    t.accent = GColorRajah;
+    // Mild is plain white; the line only tints toward the extremes.
+    t.thermal[0] = GColorPictonBlue;
+    t.thermal[1] = GColorCeleste;
+    t.thermal[2] = GColorWhite;
+    t.thermal[3] = GColorPastelYellow;
+    t.thermal[4] = GColorRajah;
   }
   return t;
 }
@@ -345,6 +369,31 @@ static void draw_fitted(GContext *ctx, const char *text, GFont font, GRect box,
 // ---- Chart ----
 
 // Night hours get a dark backdrop that runs from the sky lane down through the rain lane.
+#define NIGHT_FADE 3
+
+// A few columns of ordered dither, a quarter, then half, then three quarters filled, walking
+// from `x` in direction `dir` toward the solid band.
+static void draw_night_fade(GContext *ctx, const Theme *t, int x, int top, int bottom, int cols,
+                            int dir) {
+  int k;
+  graphics_context_set_stroke_color(ctx, t->sky_night);
+  for (k = 0; k < cols; k++) {
+    int cx = x + dir * k;
+    int y;
+    for (y = top; y < bottom; y++) {
+      bool on;
+      if (k == 0) {
+        on = ((cx | y) & 1) == 0;
+      } else if (k == 1) {
+        on = ((cx + y) & 1) == 0;
+      } else {
+        on = ((cx & y) & 1) == 0;
+      }
+      if (on) graphics_draw_pixel(ctx, GPoint(cx, y));
+    }
+  }
+}
+
 static void draw_night(GContext *ctx, const Theme *t) {
   int n = s_face.hour_count;
   int w = LAYOUT.plot.w;
@@ -363,9 +412,15 @@ static void draw_night(GContext *ctx, const Theme *t) {
     if (t->night_bar) {
       fill_rect(ctx, LAYOUT.plot.x + x0, bottom, x1 - x0, 2, t->sky_night);
     } else {
-      graphics_context_set_fill_color(ctx, t->sky_night);
-      graphics_fill_rect(ctx, GRect(LAYOUT.plot.x + x0, top, x1 - x0, bottom - top), 3,
-                         GCornersAll);
+      // Dusk and dawn fade over a few columns instead of starting with a hard edge. The
+      // chart's own sides stay square.
+      int fade_l = x0 > 0 ? NIGHT_FADE : 0;
+      int fade_r = x1 < w ? NIGHT_FADE : 0;
+      if (fade_l + fade_r > x1 - x0) fade_l = fade_r = 0;
+      fill_rect(ctx, LAYOUT.plot.x + x0 + fade_l, top, x1 - x0 - fade_l - fade_r, bottom - top,
+                t->sky_night);
+      draw_night_fade(ctx, t, LAYOUT.plot.x + x0, top, bottom, fade_l, 1);
+      draw_night_fade(ctx, t, LAYOUT.plot.x + x1 - 1, top, bottom, fade_r, -1);
     }
     i = j;
   }
@@ -499,15 +554,36 @@ static void draw_fronts(GContext *ctx, const Theme *t) {
   }
 }
 
+// Which of the five thermal bands a temperature falls in, judged in Fahrenheit: freezing
+// below 32, cool below 50, mild below 70, warm below 85, and hot from there.
+static int thermal_band(int deg) {
+  int f = s_face.metric ? (deg * 9) / 5 + 32 : deg;
+  if (f < 32) return 0;
+  if (f < 50) return 1;
+  if (f < 70) return 2;
+  if (f < 85) return 3;
+  return 4;
+}
+
+// The line takes its color from how warm each stretch is (or, in mono, its width).
+static void set_thermal_stroke(GContext *ctx, const Theme *t, int deg) {
+  int band = thermal_band(deg);
+  graphics_context_set_stroke_color(ctx, t->thermal[band]);
+  if (t->thermal_width) {
+    graphics_context_set_stroke_width(ctx, band == 0 ? 1 : (band >= 3 ? 3 : 2));
+  } else {
+    graphics_context_set_stroke_width(ctx, 2);
+  }
+}
+
 static void draw_line(GContext *ctx, const Theme *t) {
   int n = s_face.hour_count;
   int w = LAYOUT.plot.w;
   int i;
   if (n < 2) return;
   graphics_context_set_antialiased(ctx, true);
-  graphics_context_set_stroke_color(ctx, t->line);
-  graphics_context_set_stroke_width(ctx, 2);
   for (i = 0; i < n - 1; i++) {
+    set_thermal_stroke(ctx, t, (s_face.hours[i].deg + s_face.hours[i + 1].deg) / 2);
     graphics_draw_line(ctx,
                        GPoint(LAYOUT.plot.x + column_mid(i, n, w), LAYOUT.plot.y + s_face.hours[i].temp_y),
                        GPoint(LAYOUT.plot.x + column_mid(i + 1, n, w), LAYOUT.plot.y + s_face.hours[i + 1].temp_y));
@@ -515,12 +591,178 @@ static void draw_line(GContext *ctx, const Theme *t) {
   graphics_context_set_stroke_width(ctx, 1);
 }
 
-static void draw_now(GContext *ctx, const Theme *t, time_t now) {
-  if (s_face.window_end <= s_face.window_start) return;
+// The hour of the forecast that contains now, or -1 when now is outside the window.
+static int hour_now(time_t now) {
   int64_t now64 = (int64_t)now;
-  if (now64 < (int64_t)s_face.window_start || now64 >= (int64_t)s_face.window_end) return;
+  int64_t start = (int64_t)s_face.window_start;
+  if (!s_face.ok || s_face.hour_count == 0 || now64 < start) return -1;
+  int64_t i = (now64 - start) / 3600;
+  return i < s_face.hour_count ? (int)i : -1;
+}
+
+static bool reading_fresh(time_t now) {
+  int64_t now64 = (int64_t)now;
+  int64_t fetched = (int64_t)s_face.fetched_at;
+  return now64 >= fetched - 600 && now64 - fetched <= 3600;
+}
+
+// The temperature to show now: the phone's reading while it is under an hour old, then the
+// forecast for the current hour, so the face stays right when the phone stops refreshing.
+// Only when now has run past the whole forecast is the old reading shown, grayed.
+static int temp_now(time_t now, bool *stale) {
+  *stale = false;
+  if (!s_face.ok) return FACE_NO_DEG;
+  if (s_face.current_deg != FACE_NO_DEG && reading_fresh(now)) return s_face.current_deg;
+  int i = hour_now(now);
+  if (i >= 0) return s_face.hours[i].deg;
+  *stale = true;
+  return s_face.current_deg;
+}
+
+// The x of now on the chart, or -1 when now is outside the forecast window.
+static int now_px(time_t now) {
+  if (!s_face.ok || s_face.window_end <= s_face.window_start) return -1;
+  int64_t now64 = (int64_t)now;
+  if (now64 < (int64_t)s_face.window_start || now64 >= (int64_t)s_face.window_end) return -1;
   int64_t span = (int64_t)s_face.window_end - (int64_t)s_face.window_start;
-  int px = (int)(((now64 - (int64_t)s_face.window_start) * LAYOUT.plot.w) / span);
+  return (int)(((now64 - (int64_t)s_face.window_start) * LAYOUT.plot.w) / span);
+}
+
+// Where one day's labels go: its name and high along the top of the chart, its low along the
+// bottom. The temperature tag reads the same boxes so it never lands on a label.
+typedef struct {
+  char name[6];
+  char max[8];
+  char min[8];
+  GSize name_size;
+  GSize max_size;
+  GSize min_size;
+  int x;
+  int max_x;
+  bool show_max;
+  bool show_min;
+} DayLabel;
+
+static void layout_day_label(int i, DayLabel *out) {
+  GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_14);
+  GFont bold = fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD);
+  FaceDay day = s_face.days[i];
+  int span = day.span - 3;
+  int gap = 2;
+  memset(out, 0, sizeof(*out));
+  snprintf(out->max, sizeof(out->max), "%d", day.max_deg);
+  snprintf(out->min, sizeof(out->min), "%d", day.min_deg);
+  out->max_size = text_size(out->max, bold);
+  out->min_size = text_size(out->min, bold);
+  // With several days on screen, name each one in a quieter color; drop the name if the
+  // column is too narrow for it.
+  if (s_face.day_count > 1 && day.wday <= 6) {
+    snprintf(out->name, sizeof(out->name), "%s", WEEKDAYS[day.wday]);
+    out->name_size = text_size(out->name, font);
+    if (out->name_size.w + gap + out->max_size.w > span) out->name_size = GSizeZero;
+  }
+  out->x = LAYOUT.plot.x + day.x + 3;
+  out->max_x = out->name_size.w > 0 ? out->x + out->name_size.w + gap : out->x;
+  out->show_max = out->max_size.w > 0 && out->max_x + out->max_size.w <= out->x + span;
+  out->show_min = out->min_size.w > 0 && out->min_size.w <= span;
+}
+
+#define LABEL_TOP_Y (LAYOUT.plot.y - 3)
+
+static int label_bottom_y(const DayLabel *label) {
+  return LAYOUT.plot.y + LAYOUT.plot.h - label->min_size.h;
+}
+
+// Whether a rectangle touches any day label's ink, which sits about 4 to 14 pixels into
+// each 14-point text box.
+static bool hits_day_label(GRect r) {
+  int i;
+  for (i = 0; i < s_face.day_count; i++) {
+    DayLabel label;
+    layout_day_label(i, &label);
+    int top_x1 = label.show_max ? label.max_x + label.max_size.w : label.x + label.name_size.w;
+    if (top_x1 > label.x && r.origin.x < top_x1 + 1 && r.origin.x + r.size.w > label.x - 1 &&
+        r.origin.y < LABEL_TOP_Y + 15 && r.origin.y + r.size.h > LABEL_TOP_Y + 3) {
+      return true;
+    }
+    int by = label_bottom_y(&label);
+    if (label.show_min && r.origin.x < label.x + label.min_size.w + 1 &&
+        r.origin.x + r.size.w > label.x - 1 && r.origin.y < by + 15 && r.origin.y + r.size.h > by + 3) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static void draw_day_labels(GContext *ctx, const Theme *t) {
+  GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_14);
+  // Highs and lows are bold so they hold up against the night bands and shading.
+  GFont bold = fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD);
+  int i;
+  for (i = 0; i < s_face.day_count; i++) {
+    DayLabel label;
+    layout_day_label(i, &label);
+    if (label.name_size.w > 0) {
+      draw_halo_text(ctx, t, label.name, font, label.x, LABEL_TOP_Y, label.name_size, t->muted);
+    }
+    if (label.show_max) {
+      draw_halo_text(ctx, t, label.max, bold, label.max_x, LABEL_TOP_Y, label.max_size, t->text);
+    }
+    if (label.show_min) {
+      draw_halo_text(ctx, t, label.min, bold, label.x, label_bottom_y(&label), label.min_size,
+                     t->text);
+    }
+  }
+}
+
+// The current temperature rides the line in a small tag at now, filled with the line's color
+// there. It sits above the marker, or below it when the line runs near the top.
+static void draw_now_tag(GContext *ctx, const Theme *t, int x, int y, time_t now) {
+  bool stale;
+  int deg = temp_now(now, &stale);
+  if (deg == FACE_NO_DEG) return;
+  char text[12];
+  snprintf(text, sizeof(text), "%d\xc2\xb0", deg);
+  GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
+  GSize size = text_size(text, font);
+  int w = size.w + 8;
+  int h = 15;
+  // Try above the marker, then below, then to the right and left of it, and take the first
+  // spot that stays in the chart and clear of the day labels.
+  int cand_x[4] = {x - w / 2, x - w / 2, x + 9, x - 9 - w};
+  int cand_y[4] = {y - 8 - h, y + 8, y - h / 2, y - h / 2};
+  int tx = cand_x[0];
+  int ty = cand_y[0];
+  int k;
+  for (k = 0; k < 4; k++) {
+    int cx = cand_x[k];
+    int cy = cand_y[k];
+    if (cx < LAYOUT.plot.x) cx = LAYOUT.plot.x;
+    if (cx + w > LAYOUT.plot.x + LAYOUT.plot.w) cx = LAYOUT.plot.x + LAYOUT.plot.w - w;
+    if (cy < LAYOUT.plot.y - 2 || cy + h > LAYOUT.plot.y + LAYOUT.plot.h) continue;
+    if (hits_day_label(GRect(cx, cy, w, h))) continue;
+    tx = cx;
+    ty = cy;
+    break;
+  }
+  if (k == 4) {
+    if (tx < LAYOUT.plot.x) tx = LAYOUT.plot.x;
+    if (tx + w > LAYOUT.plot.x + LAYOUT.plot.w) tx = LAYOUT.plot.x + LAYOUT.plot.w - w;
+    if (ty < LAYOUT.plot.y - 2) ty = y + 8;
+  }
+  GColor fill = stale ? t->muted : t->thermal[thermal_band(deg)];
+  graphics_context_set_antialiased(ctx, true);
+  // A ring in the background color keeps the tag apart from the line and shading behind it.
+  graphics_context_set_fill_color(ctx, backdrop_at(t, tx + w / 2));
+  graphics_fill_rect(ctx, GRect(tx - 1, ty - 1, w + 2, h + 2), 5, GCornersAll);
+  graphics_context_set_fill_color(ctx, fill);
+  graphics_fill_rect(ctx, GRect(tx, ty, w, h), 4, GCornersAll);
+  draw_text(ctx, text, font, GRect(tx + 4, ty - 4, size.w + 2, 20), GTextAlignmentLeft, t->bg);
+}
+
+static void draw_now(GContext *ctx, const Theme *t, time_t now) {
+  int px = now_px(now);
+  if (px < 0) return;
   int x = LAYOUT.plot.x + px;
   int y0 = LAYOUT.cloud.y + LAYOUT.cloud.h;
   int yy;
@@ -528,51 +770,11 @@ static void draw_now(GContext *ctx, const Theme *t, time_t now) {
   bool known;
   int y = LAYOUT.plot.y + row_at(px, false, &known);
   graphics_context_set_antialiased(ctx, true);
-  graphics_context_set_fill_color(ctx, t->now);
+  graphics_context_set_fill_color(ctx, t->accent);
   graphics_fill_circle(ctx, GPoint(x, y), 5);
   graphics_context_set_fill_color(ctx, t->bg);
   graphics_fill_circle(ctx, GPoint(x, y), 2);
-}
-
-static void draw_day_labels(GContext *ctx, const Theme *t) {
-  GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_14);
-  // Highs and lows are bold so they hold up against the night bands and shading.
-  GFont bold = fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD);
-  bool named = s_face.day_count > 1;
-  int i;
-  for (i = 0; i < s_face.day_count; i++) {
-    FaceDay day = s_face.days[i];
-    char name_text[6] = "";
-    char max_text[8];
-    char min_text[8];
-    int span = day.span - 3;
-    snprintf(max_text, sizeof(max_text), "%d", day.max_deg);
-    snprintf(min_text, sizeof(min_text), "%d", day.min_deg);
-    GSize max_size = text_size(max_text, bold);
-    GSize min_size = text_size(min_text, bold);
-    // With several days on screen, name each one in a quieter color; drop the name
-    // if the column is too narrow for it.
-    GSize name_size = GSizeZero;
-    int gap = 2;
-    if (named && day.wday <= 6) {
-      snprintf(name_text, sizeof(name_text), "%s", WEEKDAYS[day.wday]);
-      name_size = text_size(name_text, font);
-      if (name_size.w + gap + max_size.w > span) name_size = GSizeZero;
-    }
-    int x = LAYOUT.plot.x + day.x + 3;
-    int top = LAYOUT.plot.y - 3;
-    int max_x = name_size.w > 0 ? x + name_size.w + gap : x;
-    if (name_size.w > 0) {
-      draw_halo_text(ctx, t, name_text, font, x, top, name_size, t->muted);
-    }
-    if (max_size.w > 0 && max_x + max_size.w <= x + span) {
-      draw_halo_text(ctx, t, max_text, bold, max_x, top, max_size, t->text);
-    }
-    if (min_size.w > 0 && min_size.w <= span) {
-      draw_halo_text(ctx, t, min_text, bold, x, LAYOUT.plot.y + LAYOUT.plot.h - min_size.h, min_size,
-                     t->text);
-    }
-  }
+  draw_now_tag(ctx, t, x, y, now);
 }
 
 static void draw_hour_labels(GContext *ctx, const Theme *t) {
@@ -724,16 +926,16 @@ static GFont s_time_font;
 
 // Rows of empty space above the digits in each time font's text box.
 #if defined(PBL_ROUND)
-#define TIME_TOP_PAD 13
+#define TIME_TOP_PAD 19
 #else
-#define TIME_TOP_PAD 16
+#define TIME_TOP_PAD 22
 #endif
 
 void face_init(void) {
 #if defined(PBL_ROUND)
-  s_time_font = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_TIME_54));
+  s_time_font = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_TIME_67));
 #else
-  s_time_font = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_TIME_64));
+  s_time_font = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_TIME_80));
 #endif
 }
 
@@ -772,73 +974,31 @@ static void draw_time(GContext *ctx, const Theme *t, struct tm *local) {
     draw_text(ctx, ampm, small,
               GRect(x + time_size.w + gap, LAYOUT.time.y + LAYOUT.time.h - am_size.h - 6,
                     am_size.w, am_size.h),
-              GTextAlignmentLeft, t->muted);
+              GTextAlignmentLeft, t->accent);
   }
 }
 
-// The hour of the forecast that contains now, or -1 when now is outside the window.
-static int hour_now(time_t now) {
-  int64_t now64 = (int64_t)now;
-  int64_t start = (int64_t)s_face.window_start;
-  if (!s_face.ok || s_face.hour_count == 0 || now64 < start) return -1;
-  int64_t i = (now64 - start) / 3600;
-  return i < s_face.hour_count ? (int)i : -1;
-}
-
-static bool reading_fresh(time_t now) {
-  int64_t now64 = (int64_t)now;
-  int64_t fetched = (int64_t)s_face.fetched_at;
-  return now64 >= fetched - 600 && now64 - fetched <= 3600;
-}
-
-// The temperature to show now: the phone's reading while it is under an hour old, then the
-// forecast for the current hour, so the face stays right when the phone stops refreshing.
-// Only when now has run past the whole forecast is the old reading shown, grayed.
-static int temp_now(time_t now, bool *stale) {
-  *stale = false;
-  if (!s_face.ok) return FACE_NO_DEG;
-  if (s_face.current_deg != FACE_NO_DEG && reading_fresh(now)) return s_face.current_deg;
-  int i = hour_now(now);
-  if (i >= 0) return s_face.hours[i].deg;
-  *stale = true;
-  return s_face.current_deg;
-}
-
-// One line under the time: the temperature in bold, then the date and place. The place
-// drops out when the line would not fit.
+// One line under the time: the date and place, dropping the place when it does not fit. The
+// temperature lives on the chart; it joins this line, grayed, only when now has run past the
+// forecast and the chart has no marker to carry it.
 static void draw_meta(GContext *ctx, const Theme *t, struct tm *local, time_t now) {
-  char temp[16];
-  // An old forecast turns the temperature gray instead of hiding it.
-  GColor temp_color = t->text;
-  bool stale;
-  int deg = temp_now(now, &stale);
-  if (deg == FACE_NO_DEG) {
-    snprintf(temp, sizeof(temp), "--\xc2\xb0");
-    temp_color = t->muted;
-  } else {
-    snprintf(temp, sizeof(temp), "%d\xc2\xb0", deg);
-    if (stale) temp_color = t->muted;
-  }
   const char *wday = (local->tm_wday >= 0 && local->tm_wday <= 6) ? WEEKDAYS[local->tm_wday] : "";
-  char meta[64];
-  GFont temp_font = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
-  GFont meta_font = fonts_get_system_font(FONT_KEY_GOTHIC_18);
-  GSize temp_size = text_size(temp, temp_font);
-  int gap = 6;
-  int room = LAYOUT.meta.w - temp_size.w - gap;
-  snprintf(meta, sizeof(meta), "%s %d", wday, local->tm_mday);
-  if (s_face.ok && s_face.place[0]) {
-    char with_place[64];
-    snprintf(with_place, sizeof(with_place), "%s  \xc2\xb7  %s", meta, s_face.place);
-    if (text_size(with_place, meta_font).w <= room) snprintf(meta, sizeof(meta), "%s", with_place);
+  GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_18);
+  char date[16];
+  char temp[16] = "";
+  snprintf(date, sizeof(date), "%s %d", wday, local->tm_mday);
+  if (s_face.ok && now_px(now) < 0) {
+    bool stale;
+    int deg = temp_now(now, &stale);
+    if (deg != FACE_NO_DEG) snprintf(temp, sizeof(temp), "%d\xc2\xb0  \xc2\xb7  ", deg);
   }
-  GSize meta_size = text_size(meta, meta_font);
-  int x = LAYOUT.meta.x + (LAYOUT.meta.w - (temp_size.w + gap + meta_size.w)) / 2;
-  // Gothic 24 and 18 share a baseline when their boxes are offset by about 7 pixels.
-  int y = LAYOUT.meta.y + (LAYOUT.meta.h - 24) / 2 - 3;
-  draw_text(ctx, temp, temp_font, GRect(x, y, temp_size.w + 2, 30), GTextAlignmentLeft, temp_color);
-  draw_text(ctx, meta, meta_font, GRect(x + temp_size.w + gap, y + 7, meta_size.w + 2, 22),
-            GTextAlignmentLeft, t->muted);
+  char line[64];
+  snprintf(line, sizeof(line), "%s%s  \xc2\xb7  %s", temp, date, s_face.place);
+  if (!s_face.ok || !s_face.place[0] || text_size(line, font).w > LAYOUT.meta.w) {
+    snprintf(line, sizeof(line), "%s%s", temp, date);
+  }
+  draw_fitted(ctx, line, font, GRect(LAYOUT.meta.x, LAYOUT.meta.y, LAYOUT.meta.w, LAYOUT.meta.h),
+              GTextAlignmentCenter, t->muted);
 }
 
 // ---- Status row ----
