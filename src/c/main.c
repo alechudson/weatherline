@@ -9,6 +9,7 @@ static void redraw(void) {
 
 // The watch asks the phone for a refresh on its own schedule, because the phone
 // may stop the Pebble app's script in the background and never wake its own timer.
+// Once an hour is enough for that backstop; the phone runs the user's interval itself.
 static void request_refresh(void) {
   DictionaryIterator *out;
   if (app_message_outbox_begin(&out) != APP_MSG_OK) return;
@@ -22,7 +23,7 @@ static void request_refresh(void) {
 
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
   (void)units_changed;
-  if (tick_time->tm_min % 30 == 0) request_refresh();
+  if (tick_time->tm_min == 0) request_refresh();
   redraw();
 }
 
@@ -33,12 +34,6 @@ static void battery_handler(BatteryChargeState charge) {
 
 static void bluetooth_handler(bool connected) {
   if (connected) request_refresh();
-  redraw();
-}
-
-static void health_handler(HealthEventType event, void *context) {
-  (void)event;
-  (void)context;
   redraw();
 }
 
@@ -69,11 +64,9 @@ static void init(void) {
   tick_timer_service_subscribe(MINUTE_UNIT, tick_handler);
   battery_state_service_subscribe(battery_handler);
   bluetooth_connection_service_subscribe(bluetooth_handler);
-  health_service_events_subscribe(health_handler, NULL);
 }
 
 static void deinit(void) {
-  health_service_events_unsubscribe();
   bluetooth_connection_service_unsubscribe();
   battery_state_service_unsubscribe();
   tick_timer_service_unsubscribe();

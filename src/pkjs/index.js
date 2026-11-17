@@ -11,6 +11,11 @@ var attempts = 0;
 var retryTimer = null;
 var refreshTimer = null;
 var busySince = 0;
+// What the watch last acknowledged, so an unchanged frame is not sent again. Bluetooth and
+// the watch's flash write cost far more battery than building the frame on the phone.
+var lastSent = null;
+// When a refresh last checked the location and had a forecast to show, in ms.
+var checkedAt = 0;
 
 var PLATFORM_KEY = 'weatherline.platform';
 var PLATFORM_CODES = {1: 'emery', 2: 'gabbro'};
@@ -53,7 +58,17 @@ function geolocate(highAccuracy) {
   });
 }
 
+function sameBytes(a, b) {
+  if (!a || !b || a.length !== b.length) return false;
+  var i;
+  for (i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
 function queueSend(item) {
+  if (sameBytes(item.bytes, pending ? pending.bytes : lastSent)) return;
   pending = item;
   attempts = 0;
   if (retryTimer) {
@@ -75,6 +90,7 @@ function sendPending() {
   Pebble.sendAppMessage(dict, function() {
     inflight = false;
     console.log('weatherline sent ' + item.lat + ' ' + item.lon + ' hours ' + item.hours);
+    lastSent = item.bytes;
     if (pending === item) pending = null;
     attempts = 0;
     if (pending) sendPending();
@@ -128,9 +144,12 @@ function armRefresh() {
   }, st.refreshMin * 60000);
 }
 
-function finish(gen) {
+// `checked` is true when this refresh found the location and has a current forecast; only
+// then may a watch request inside the refresh interval be answered without a new one.
+function finish(gen, checked) {
   if (gen !== generation) return;
   busySince = 0;
+  if (checked) checkedAt = Date.now();
   armRefresh();
 }
 
@@ -191,8 +210,9 @@ function fetchForecast(fix, gen) {
     };
     forecast.writeCache(localStorage, stored);
     sendForecast(stored);
-    requestPlace(lat, lon, gen);
-    finish(gen);
+    // The name only changes with the place, so a known one is kept.
+    if (!place) requestPlace(lat, lon, gen);
+    finish(gen, true);
   };
   xhr.onerror = function() {
     if (gen !== generation) return;
@@ -203,12 +223,14 @@ function fetchForecast(fix, gen) {
   xhr.send();
 }
 
-function cycle() {
+// The stored forecast goes to the watch first only when the face has just started; on a
+// later refresh the watch already shows it, and the result follows soon.
+function cycle(sendFirst) {
   var gen = ++generation;
   busySince = Date.now();
   var st = settings.readSettings(localStorage);
   var cached = forecast.readCache(localStorage);
-  sendForecast(cached);
+  if (sendFirst) sendForecast(cached);
   locate.resolveFix({
     storage: localStorage,
     nowMs: Date.now(),
@@ -216,12 +238,21 @@ function cycle() {
     stillCurrent: function() { return gen === generation; }
   }).then(function(fix) {
     if (gen !== generation) return;
-    if (!fix || skipFetch(cached, fix, st)) {
+    if (!fix) {
+      sendForecast(cached);
       finish(gen);
+      return;
+    }
+    if (skipFetch(cached, fix, st)) {
+      // The frame can still change without a fetch, at midnight say.
+      sendForecast(cached);
+      finish(gen, true);
       return;
     }
     fetchForecast(fix, gen);
   }, function() {
+    if (gen !== generation) return;
+    sendForecast(cached);
     finish(gen);
   });
 }
@@ -232,8 +263,15 @@ function busy() {
 }
 
 Pebble.addEventListener('ready', function() {
-  cycle();
+  cycle(true);
 });
+
+// A refresh inside the interval already found the place and a fresh forecast.
+function recentlyChecked() {
+  if (!checkedAt) return false;
+  var st = settings.readSettings(localStorage);
+  return Date.now() - checkedAt < st.refreshMin * 60000;
+}
 
 Pebble.addEventListener('appmessage', function(e) {
   var payload = (e && e.payload) || {};
@@ -241,7 +279,13 @@ Pebble.addEventListener('appmessage', function(e) {
   if (code === undefined) code = payload[messageKeys.REQUEST];
   if (code === undefined) return;
   if (PLATFORM_CODES[code]) localStorage.setItem(PLATFORM_KEY, PLATFORM_CODES[code]);
-  if (!busy()) cycle();
+  if (busy()) return;
+  if (recentlyChecked()) {
+    // Nothing new to fetch; the watch gets the stored frame only if it has changed.
+    sendForecast(forecast.readCache(localStorage));
+    return;
+  }
+  cycle(false);
 });
 
 Pebble.addEventListener('showConfiguration', function() {

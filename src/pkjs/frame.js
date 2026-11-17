@@ -13,21 +13,23 @@ var WIND_FULL_KMH = 50;
 var LIGHT_FLAG = 0x10;
 var MONO_FLAG = 0x20;
 
-// Both watches use the same centered stack, with the time at the bottom: steps, the current
+// Both watches use the same centered stack, with the time near the bottom: steps, the current
 // wind and battery along the top, a sky lane, the chart (which carries the current
-// temperature on its line), wind, precipitation, the date and place, then the time.
+// temperature on its line), wind and precipitation. On emery the time comes next with the date
+// and place under it; on gabbro the date and place sit above the time, where the round screen
+// is still wide enough for them.
 var LAYOUTS = {
   emery: {
-    steps: {x: 4, y: 1, w: 64, h: 16},
-    windnow: {x: 68, y: 1, w: 64, h: 16},
-    battery: {x: 132, y: 1, w: 64, h: 16},
-    cloud: {x: 4, y: 20, w: 192, h: 16},
-    plot: {x: 4, y: 37, w: 192, h: 76},
-    wind: {x: 4, y: 114, w: 192, h: 14},
-    precip: {x: 4, y: 129, w: 192, h: 15},
-    meta: {x: 4, y: 146, w: 192, h: 19},
-    time: {x: 0, y: 165, w: 200, h: 57},
-    bluetooth: {x: 8, y: 193, r: 4},
+    steps: {x: 10, y: 1, w: 60, h: 16},
+    windnow: {x: 70, y: 1, w: 60, h: 16},
+    battery: {x: 130, y: 1, w: 60, h: 16},
+    cloud: {x: 10, y: 20, w: 180, h: 16},
+    plot: {x: 10, y: 37, w: 180, h: 78},
+    wind: {x: 10, y: 116, w: 180, h: 14},
+    precip: {x: 10, y: 131, w: 180, h: 15},
+    time: {x: 0, y: 151, w: 200, h: 52},
+    meta: {x: 10, y: 206, w: 180, h: 19},
+    bluetooth: {x: 14, y: 177, r: 4},
     inset: 14
   },
   gabbro: {
@@ -35,11 +37,11 @@ var LAYOUTS = {
     windnow: {x: 106, y: 36, w: 48, h: 16},
     battery: {x: 154, y: 36, w: 52, h: 16},
     cloud: {x: 36, y: 56, w: 188, h: 15},
-    plot: {x: 36, y: 72, w: 188, h: 59},
-    wind: {x: 36, y: 132, w: 188, h: 13},
-    precip: {x: 36, y: 146, w: 188, h: 15},
-    meta: {x: 40, y: 163, w: 180, h: 19},
-    time: {x: 60, y: 183, w: 140, h: 48},
+    plot: {x: 36, y: 72, w: 188, h: 74},
+    wind: {x: 36, y: 147, w: 188, h: 13},
+    precip: {x: 36, y: 161, w: 188, h: 15},
+    meta: {x: 40, y: 178, w: 180, h: 19},
+    time: {x: 60, y: 197, w: 140, h: 34},
     bluetooth: {x: 130, y: 22, r: 4},
     inset: 11
   }

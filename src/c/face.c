@@ -95,7 +95,9 @@ typedef struct {
 
 static Face s_face;
 static Face s_scratch;
+// The frame as stored on the watch, so a repeat of it skips the flash write.
 static uint8_t s_blob[FACE_MAX_BYTES];
+static int s_blob_len = 0;
 
 static const char *WEEKDAYS[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
 
@@ -281,7 +283,10 @@ static void save_bytes(const uint8_t *data, int len) {
 bool face_set_frame(const uint8_t *data, int len) {
   if (!unpack(&s_scratch, data, len)) return false;
   s_face = s_scratch;
+  if (len == s_blob_len && memcmp(data, s_blob, (size_t)len) == 0) return true;
   save_bytes(data, len);
+  memcpy(s_blob, data, (size_t)len);
+  s_blob_len = len;
   return true;
 }
 
@@ -301,6 +306,7 @@ void face_load(void) {
   }
   if (!unpack(&s_scratch, s_blob, len)) return;
   s_face = s_scratch;
+  s_blob_len = len;
 }
 
 static void fill_rect(GContext *ctx, int x, int y, int w, int h, GColor color) {
@@ -1024,16 +1030,16 @@ static GFont s_time_font;
 
 // Rows of empty space above the digits in each time font's text box.
 #if defined(PBL_ROUND)
-#define TIME_TOP_PAD 19
+#define TIME_TOP_PAD 14
 #else
-#define TIME_TOP_PAD 22
+#define TIME_TOP_PAD 19
 #endif
 
 void face_init(void) {
 #if defined(PBL_ROUND)
-  s_time_font = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_TIME_67));
+  s_time_font = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_TIME_48));
 #else
-  s_time_font = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_TIME_80));
+  s_time_font = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_TIME_72));
 #endif
 }
 
