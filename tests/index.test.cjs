@@ -155,3 +155,63 @@ test('saving settings mid-fetch keeps the fetch and redraws with the new unit', 
   assert.equal(app.sent[0][10000][2] & 15, 2, 'and it is in Celsius');
   assert.ok(app.sent[0][10000][2] & 0x10, 'with the light theme');
 });
+
+function answer(xhr, body) {
+  xhr.status = 200;
+  xhr.responseText = body;
+  xhr.onload();
+}
+
+test('a watch request inside the refresh interval sends nothing and checks nothing', async function(t) {
+  var realNow = Date.now;
+  Date.now = function() { return NOW_MS; };
+  var app = boot({watchInfo: {platform: 'emery'}});
+  t.after(function() {
+    app.restore();
+    Date.now = realNow;
+  });
+
+  app.listeners.ready();
+  await settle();
+  await settle();
+  answer(app.requests[0], forecastBody());
+  answer(app.requests[1], JSON.stringify({city: 'Austin'}));
+  assert.equal(app.sent.length, 2, 'the forecast, then the forecast with its place');
+  var geo = app.geoCalls();
+  var asked = app.requests.length;
+
+  Date.now = function() { return NOW_MS + 10 * 60000; };
+  app.listeners.appmessage({payload: {REQUEST: 1}});
+  await settle();
+  await settle();
+  assert.equal(app.geoCalls(), geo, 'no location check');
+  assert.equal(app.requests.length, asked, 'no network request');
+  assert.equal(app.sent.length, 2, 'and the unchanged frame is not sent again');
+});
+
+test('a later fetch for the same place keeps the known place name', async function(t) {
+  var realNow = Date.now;
+  Date.now = function() { return NOW_MS; };
+  var app = boot({watchInfo: {platform: 'emery'}});
+  t.after(function() {
+    app.restore();
+    Date.now = realNow;
+  });
+
+  app.listeners.ready();
+  await settle();
+  await settle();
+  answer(app.requests[0], forecastBody());
+  assert.ok(app.requests[1].url.indexOf('bigdatacloud') >= 0, 'the first fetch asks for the place');
+  answer(app.requests[1], JSON.stringify({city: 'Austin'}));
+
+  Date.now = function() { return NOW_MS + 61 * 60000; };
+  app.listeners.appmessage({payload: {REQUEST: 1}});
+  await settle();
+  await settle();
+  assert.equal(app.requests.length, 3, 'an hour on, the forecast is fetched again');
+  answer(app.requests[2], forecastBody());
+  assert.equal(app.requests.length, 3, 'without asking for the place again');
+  var cache = JSON.parse(app.storage.getItem('weatherline.forecast') || 'null');
+  if (cache) assert.equal(cache.place, 'Austin');
+});

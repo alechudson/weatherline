@@ -2,7 +2,7 @@
 
 Weatherline is a watchface for Pebble Time 2 (emery) and Pebble Round 2 (gabbro). It draws an hour-by-hour forecast with the time, the place, today's steps, the battery, and the Bluetooth state.
 
-Both watches share one centered layout with the time at the bottom: steps, the current wind and the battery along the top, then the chart, then the date and the place, then a large time.
+Both watches share one centered layout with the time near the bottom: steps, the current wind and the battery along the top, then the chart. On Time 2 a large time comes next, with the date and the place under it; on Round 2 the date and the place sit above the time, where the round screen is still wide enough for them.
 
 The line is the face. Its color follows the temperature: white when mild, cyan when cool and blue below freezing, orange when warm and coral when hot (darker tones in the light theme; in Mono the line grows thicker as it warms instead). An orange ring marks now, and the current temperature rides the line beside it in a small tag filled with the line's color there. The tag sits above the ring, or below or beside it when a day label is in the way.
 
@@ -73,7 +73,7 @@ Open the config page from the Pebble phone app. There are four settings.
 
 Changing the day count, the unit, or the theme redraws the forecast already stored on the phone. It does not download again.
 
-The phone tries a network location first, then GPS, and keeps the last fix. The watch also asks the phone for a refresh every half hour and when Bluetooth reconnects, so the forecast stays current even if the phone pauses the app in the background. If a refresh fails, the watch keeps showing the last forecast, and the temperature follows the forecast hour by hour until it runs out.
+The phone tries a network location first, then GPS, and keeps the last fix. The watch also asks the phone for a refresh every hour and when Bluetooth reconnects, so the forecast stays current even if the phone pauses the app in the background. To save the watch's battery, the phone answers a request that comes within the refresh interval of its last good refresh without checking again, sends the watch a frame only when it differs from the last one the watch received, and looks up the place name only when the location changes. The watch also skips saving a frame that matches the one it has stored. If a refresh fails, the watch keeps showing the last forecast, and the temperature follows the forecast hour by hour until it runs out.
 
 ## Data
 

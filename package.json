@@ -29,14 +29,14 @@
       "media": [
         {
           "type": "font",
-          "name": "FONT_TIME_80",
+          "name": "FONT_TIME_72",
           "file": "fonts/BarlowCondensed-SemiBold.ttf",
           "characterRegex": "[0-9:]",
           "targetPlatforms": ["emery"]
         },
         {
           "type": "font",
-          "name": "FONT_TIME_67",
+          "name": "FONT_TIME_48",
           "file": "fonts/BarlowCondensed-SemiBold.ttf",
           "characterRegex": "[0-9:]",
           "targetPlatforms": ["gabbro"]
