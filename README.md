@@ -75,6 +75,8 @@ Changing the day count, the unit, or the theme redraws the forecast already stor
 
 The phone tries a network location first, then GPS, and keeps the last fix. The watch also asks the phone for a refresh every hour and when Bluetooth reconnects, so the forecast stays current even if the phone pauses the app in the background. To save the watch's battery, the phone answers a request that comes within the refresh interval of its last good refresh without checking again, sends the watch a frame only when it differs from the last one the watch received, and looks up the place name only when the location changes. The watch also skips saving a frame that matches the one it has stored. If a refresh fails, the watch keeps showing the last forecast, and the temperature follows the forecast hour by hour until it runs out.
 
-## Data
+## Credits
 
-Forecasts come from [Open-Meteo](https://open-meteo.com/) and are licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Place names come from the BigDataCloud reverse geocoder. Neither service needs an API key.
+[Weather data by Open-Meteo.com](https://open-meteo.com/) (CC BY 4.0). Place names by [BigDataCloud](https://www.bigdatacloud.com/). The time is set in [Barlow Condensed](https://github.com/jpt/barlow), copyright 2017 The Barlow Project Authors, under the SIL Open Font License (`resources/fonts/OFL.txt`).
+
+Full notices are in [CREDITS.md](CREDITS.md). The code is MIT, copyright 2026 Alec Hudson.
