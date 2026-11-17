@@ -4,13 +4,15 @@ Weatherline is a watchface for Pebble Time 2 (emery) and Pebble Round 2 (gabbro)
 
 Both watches share one centered layout with the time at the bottom: steps, the current wind and the battery along the top, then the chart, then the date and the place, then a large time.
 
-The line is the face. Its color follows the temperature: white when mild, tinting toward pale blue when cool and blue below freezing, and toward pale yellow when warm and apricot when hot (darker tones in the light theme; in Mono the line grows thicker as it warms instead). An apricot ring marks now, and the current temperature rides the line beside it in a small tag filled with the line's color there. The tag sits above the ring, or below or beside it when a day label is in the way.
+The line is the face. Its color follows the temperature: white when mild, cyan when cool and blue below freezing, orange when warm and coral when hot (darker tones in the light theme; in Mono the line grows thicker as it warms instead). An orange ring marks now, and the current temperature rides the line beside it in a small tag filled with the line's color there. The tag sits above the ring, or below or beside it when a day label is in the way.
 
 The temperature is the phone's latest reading while it is under an hour old. After that the watch shows the forecast for the current hour, and the current wind always comes from the forecast for the current hour, so both stay right when the phone stops refreshing in the background. When the clock runs past the whole forecast, the ring and tag go away and the last temperature joins the date line, grayed.
 
-The area between the line and the same hour yesterday is shaded apricot where it will be warmer and periwinkle where it will be colder (orange and indigo in the light theme), so warm and cold fronts stand out. Night hours sit on a dark blue band behind the chart that fades in and out over a few pixels at dusk and dawn. A lane along the top shows the sky as a bank of puffy clouds that grows taller with cloud cover; where the lane is empty, the sky is clear. Below the chart, a wind lane shades wind speed in gray (full at 50 km/h, about 31 mph) and places an arrow every few hours pointing the way the wind blows; arrows turn yellow at about 30 km/h (19 mph) and calm hours get a dot. Rain is a bar per hour along the bottom, taller when heavier, and snow is a stack of flakes. Each day is labeled with its high and low, and with its name when more than one day is shown.
+The area between the line and the same hour yesterday is shaded orange where it will be warmer and blue where it will be colder, so warm and cold fronts stand out. Night hours sit on a dark blue band behind the chart that fades in and out over a few pixels at dusk and dawn. A lane along the top shows the sky as a bank of puffy clouds that grows taller with cloud cover; where the lane is empty, the sky is clear. Below the chart, a wind lane shades wind speed in gray (full at 50 km/h, about 31 mph) and places a wind barb every few hours. A barb's staff points to where the wind comes from, and the feathers at its tip give the speed in knots: a short feather is 5, a long one 10 and a filled pennant 50. A small ring means calm. Barbs snap to eight compass points so every stroke lands on whole pixels. Rain is a bar per hour along the bottom, taller when heavier, and snow is a stack of flakes. Each day is labeled with its high and low, and with its name when more than one day is shown.
 
-The time is set in Barlow Condensed SemiBold, included under the SIL Open Font License (`resources/fonts/OFL.txt`). AM and PM, the now ring and the settings page share one apricot accent.
+The time is set in Barlow Condensed SemiBold, included under the SIL Open Font License (`resources/fonts/OFL.txt`). AM and PM, the now ring and the settings page share one orange accent.
+
+Screenshots are color-corrected for the real panel.
 
 | Time 2 | Round 2 |
 | --- | --- |
@@ -19,7 +21,11 @@ The time is set in Barlow Condensed SemiBold, included under the SIL Open Font L
 | ![Time 2, light theme](screenshots/emery-2-day-light.png) | ![Round 2, light theme](screenshots/gabbro-2-day-light.png) |
 | ![Time 2, mono theme](screenshots/emery-2-day-mono.png) | ![Round 2, mono theme](screenshots/gabbro-2-day-mono.png) |
 
-The top row shows today's steps, the current wind with an arrow the way it blows (mph with Fahrenheit, km/h with Celsius), and the battery. A red Bluetooth sign appears left of the time (top center on Round 2) when the phone is disconnected.
+The top row shows today's steps, the current wind as a barb and a speed (mph with Fahrenheit, km/h with Celsius), and the battery. A red Bluetooth sign appears left of the time (top center on Round 2) when the phone is disconnected.
+
+## The screen
+
+Both watches have a reflective color screen: it is lit by the room or the sun, which keeps it readable outdoors and lets it stay on all day, but it shows colors much softer than a phone does. Pale tints land almost on white and oranges turn peach, so every color on the face was chosen by how it looks after the SDK's panel color correction (`pebble screenshot` applies it by default), not by its nominal value. Shading fills three pixels in four so it keeps its color, the temperature line is 3 pixels wide, and the now line is solid. Light reads best in daylight; Dark suits dim rooms and the backlight.
 
 ## Build
 

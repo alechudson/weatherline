@@ -92,7 +92,7 @@ function configPage(settings) {
       {value: 45, label: '45 min'},
       {value: 60, label: '1 hour'}
     ], s.refreshMin)
-    + group('Theme', 'Light is easy to read in sunlight. Mono is black, white and gray only.', 'theme', [
+    + group('Theme', 'The watch screen is lit by daylight, so Light reads best outdoors and Dark suits dim rooms and the backlight. Mono is black, white and gray only.', 'theme', [
       {value: 'dark', label: 'Dark'},
       {value: 'light', label: 'Light'},
       {value: 'mono', label: 'Mono'}

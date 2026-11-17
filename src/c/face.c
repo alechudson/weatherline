@@ -80,9 +80,7 @@ typedef struct {
   GColor sky_night;
   GColor cloud_rim;
   GColor wind;
-  GColor wind_edge;
-  GColor wind_arrow;
-  GColor wind_strong;
+  GColor wind_barb;
   // The signature accent: the now marker and AM/PM.
   GColor accent;
   // The temperature line's color by how warm it is: freezing, cool, mild, warm and hot.
@@ -102,8 +100,10 @@ static uint8_t s_blob[FACE_MAX_BYTES];
 static const char *WEEKDAYS[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
 
 // One palette per theme: grays for clouds and wind, a warm and a cool tone for warmer and
-// colder than yesterday, blue only for water, a quiet band for night, a ramp for the line
-// that tints only toward hot and freezing, and one apricot accent.
+// colder than yesterday, blue for water, a quiet band for night, a ramp for the line that
+// tints only toward hot and freezing, and one orange accent. The watch's reflective panel
+// mutes color a lot (pastels land near white, oranges near peach), so every color here was
+// picked by how it looks after the SDK's panel color correction, not by its nominal value.
 static Theme theme(void) {
   Theme t;
   t.striped_colder = false;
@@ -128,9 +128,7 @@ static Theme theme(void) {
     t.sky_night = GColorLightGray;
     t.cloud_rim = GColorWhite;
     t.wind = GColorDarkGray;
-    t.wind_edge = GColorLightGray;
-    t.wind_arrow = GColorLightGray;
-    t.wind_strong = GColorWhite;
+    t.wind_barb = GColorWhite;
     t.accent = GColorWhite;
     t.thermal[0] = GColorWhite;
     t.thermal[1] = GColorWhite;
@@ -144,20 +142,18 @@ static Theme theme(void) {
     t.muted = GColorDarkGray;
     t.grid = GColorLightGray;
     t.warmer = GColorOrange;
-    t.colder = GColorLiberty;
-    t.rain = GColorVividCerulean;
+    t.colder = GColorBlueMoon;
+    t.rain = GColorBlue;
     t.snow = GColorDarkGray;
     t.now = GColorBlack;
     t.sky_cloud = GColorLightGray;
-    t.sky_night = GColorCeleste;
+    t.sky_night = GColorBabyBlueEyes;
     t.cloud_rim = GColorDarkGray;
     t.wind = GColorLightGray;
-    t.wind_edge = GColorDarkGray;
-    t.wind_arrow = GColorDarkGray;
-    t.wind_strong = GColorWindsorTan;
+    t.wind_barb = GColorBlack;
     t.accent = GColorOrange;
-    t.thermal[0] = GColorBlueMoon;
-    t.thermal[1] = GColorCobaltBlue;
+    t.thermal[0] = GColorDukeBlue;
+    t.thermal[1] = GColorBlueMoon;
     t.thermal[2] = GColorBlack;
     t.thermal[3] = GColorWindsorTan;
     t.thermal[4] = GColorRed;
@@ -166,25 +162,24 @@ static Theme theme(void) {
     t.text = GColorWhite;
     t.muted = GColorLightGray;
     t.grid = GColorDarkGray;
-    t.warmer = GColorRajah;
-    t.colder = GColorBabyBlueEyes;
-    t.rain = GColorPictonBlue;
+    t.warmer = GColorChromeYellow;
+    t.colder = GColorPictonBlue;
+    t.rain = GColorVividCerulean;
     t.snow = GColorWhite;
     t.now = GColorWhite;
     t.sky_cloud = GColorLightGray;
     t.sky_night = GColorOxfordBlue;
     t.cloud_rim = GColorWhite;
     t.wind = GColorDarkGray;
-    t.wind_edge = GColorLightGray;
-    t.wind_arrow = GColorWhite;
-    t.wind_strong = GColorIcterine;
-    t.accent = GColorRajah;
-    // Mild is plain white; the line only tints toward the extremes.
+    t.wind_barb = GColorWhite;
+    t.accent = GColorChromeYellow;
+    // Mild is plain white. Pale tints wash out to white on the reflective panel, so each
+    // other stop is a color that still reads as itself there.
     t.thermal[0] = GColorPictonBlue;
-    t.thermal[1] = GColorCeleste;
+    t.thermal[1] = GColorCyan;
     t.thermal[2] = GColorWhite;
-    t.thermal[3] = GColorPastelYellow;
-    t.thermal[4] = GColorRajah;
+    t.thermal[3] = GColorChromeYellow;
+    t.thermal[4] = GColorSunsetOrange;
   }
   return t;
 }
@@ -539,7 +534,8 @@ static void draw_fronts(GContext *ctx, const Theme *t) {
     } else {
       continue;
     }
-    // A checkerboard reads as a softer tone than a solid fill, so the line stays on top.
+    // Three pixels of every four: dense enough to hold its color on the reflective panel,
+    // open enough that the line stays on top.
     int y;
     if (striped) {
       // Every other row, so colder reads as horizontal lines rather than a checker.
@@ -548,8 +544,9 @@ static void draw_fronts(GContext *ctx, const Theme *t) {
       }
       continue;
     }
-    for (y = y0 + ((y0 + px) & 1); y < y1; y += 2) {
-      graphics_draw_pixel(ctx, GPoint(x, LAYOUT.plot.y + y));
+    for (y = y0 + 1; y < y1; y++) {
+      int sy = LAYOUT.plot.y + y;
+      if ((x & sy & 1) == 0) graphics_draw_pixel(ctx, GPoint(x, sy));
     }
   }
 }
@@ -570,9 +567,9 @@ static void set_thermal_stroke(GContext *ctx, const Theme *t, int deg) {
   int band = thermal_band(deg);
   graphics_context_set_stroke_color(ctx, t->thermal[band]);
   if (t->thermal_width) {
-    graphics_context_set_stroke_width(ctx, band == 0 ? 1 : (band >= 3 ? 3 : 2));
+    graphics_context_set_stroke_width(ctx, band == 0 ? 2 : (band >= 3 ? 4 : 3));
   } else {
-    graphics_context_set_stroke_width(ctx, 2);
+    graphics_context_set_stroke_width(ctx, 3);
   }
 }
 
@@ -765,8 +762,8 @@ static void draw_now(GContext *ctx, const Theme *t, time_t now) {
   if (px < 0) return;
   int x = LAYOUT.plot.x + px;
   int y0 = LAYOUT.cloud.y + LAYOUT.cloud.h;
-  int yy;
-  for (yy = y0; yy < LAYOUT.precip.y + LAYOUT.precip.h; yy += 2) fill_rect(ctx, x, yy, 1, 1, t->now);
+  // A solid hairline in the muted tone: a dotted one breaks up on the reflective panel.
+  fill_rect(ctx, x, y0, 1, LAYOUT.precip.y + LAYOUT.precip.h - y0, t->muted);
   bool known;
   int y = LAYOUT.plot.y + row_at(px, false, &known);
   graphics_context_set_antialiased(ctx, true);
@@ -798,38 +795,153 @@ static void draw_hour_labels(GContext *ctx, const Theme *t) {
   }
 }
 
-// Arrows go every few hours: the smallest step that divides a day and leaves room between them.
+// Barbs go every few hours: the smallest step that divides a day and leaves room between them.
 static int wind_step_hours(void) {
   static const int STEPS[] = {1, 2, 3, 4, 6, 8, 12, 24};
   int n = s_face.hour_count;
   int k;
   for (k = 0; k < (int)ARRAY_LENGTH(STEPS); k++) {
-    if (STEPS[k] * LAYOUT.plot.w >= 13 * n) return STEPS[k];
+    if (STEPS[k] * LAYOUT.plot.w >= 17 * n) return STEPS[k];
   }
   return 24;
 }
 
-// An arrow pointing the way the wind blows, i.e. away from where it comes from.
-static void draw_wind_arrow(GContext *ctx, int x, int y, int from_deg, int len) {
-  int32_t angle = TRIG_MAX_ANGLE * ((from_deg + 180) % 360) / 360;
-  int32_t s = sin_lookup(angle);
-  int32_t c = cos_lookup(angle);
-  int half = len / 2;
-  GPoint tip = GPoint(x + (int)(s * half / TRIG_MAX_RATIO), y - (int)(c * half / TRIG_MAX_RATIO));
-  GPoint tail = GPoint(x - (int)(s * half / TRIG_MAX_RATIO), y + (int)(c * half / TRIG_MAX_RATIO));
-  graphics_draw_line(ctx, tail, tip);
-  int head = 3 + len / 6;
+// ---- Wind barbs ----
+//
+// A barb's staff points to where the wind comes from, and the feathers at its far end give the
+// speed in knots: a half feather is 5, a full one 10 and a filled pennant 50. Calm is a small
+// ring. Directions snap to eight compass points so every stroke is horizontal, vertical or a
+// true diagonal, which lands on whole pixels with no antialiasing blur.
+
+#define BARB_MAX_PX 80
+
+typedef struct {
+  int8_t x;
+  int8_t y;
+} BarbPx;
+
+typedef struct {
+  BarbPx px[BARB_MAX_PX];
+  int count;
+} Barb;
+
+// Unit steps for N, NE, E, SE, S, SW, W and NW, with y growing downward.
+static const int8_t DIR8[8][2] = {
+  {0, -1}, {1, -1}, {1, 0}, {1, 1}, {0, 1}, {-1, 1}, {-1, 0}, {-1, -1}
+};
+
+static void barb_put(Barb *b, int x, int y) {
   int k;
-  for (k = -1; k <= 1; k += 2) {
-    int32_t back = angle + TRIG_MAX_ANGLE / 2 + k * TRIG_MAX_ANGLE / 10;
-    graphics_draw_line(ctx, tip,
-                       GPoint(tip.x + (int)(sin_lookup(back) * head / TRIG_MAX_RATIO),
-                              tip.y - (int)(cos_lookup(back) * head / TRIG_MAX_RATIO)));
+  for (k = 0; k < b->count; k++) {
+    if (b->px[k].x == x && b->px[k].y == y) return;
+  }
+  if (b->count < BARB_MAX_PX) {
+    b->px[b->count].x = (int8_t)x;
+    b->px[b->count].y = (int8_t)y;
+    b->count += 1;
   }
 }
 
-// The wind lane: speed is a soft area rising from the floor, and arrows every few hours show
-// which way it blows.
+static void barb_line(Barb *b, int x0, int y0, int x1, int y1) {
+  int dx = x1 > x0 ? x1 - x0 : x0 - x1;
+  int dy = y1 > y0 ? y0 - y1 : y1 - y0;
+  int sx = x0 < x1 ? 1 : -1;
+  int sy = y0 < y1 ? 1 : -1;
+  int err = dx + dy;
+  while (true) {
+    barb_put(b, x0, y0);
+    if (x0 == x1 && y0 == y1) break;
+    int e2 = 2 * err;
+    if (e2 >= dy) {
+      err += dy;
+      x0 += sx;
+    }
+    if (e2 <= dx) {
+      err += dx;
+      y0 += sy;
+    }
+  }
+}
+
+// Builds a barb around the origin.
+static void build_barb(Barb *b, int from_deg, int knots) {
+  b->count = 0;
+  int k5 = ((knots + 2) / 5) * 5;
+  if (k5 < 5) {
+    static const int8_t RING[12][2] = {
+      {-1, -2}, {0, -2}, {1, -2}, {2, -1}, {2, 0}, {2, 1},
+      {1, 2}, {0, 2}, {-1, 2}, {-2, 1}, {-2, 0}, {-2, -1}
+    };
+    int k;
+    for (k = 0; k < 12; k++) barb_put(b, RING[k][0], RING[k][1]);
+    return;
+  }
+  if (k5 > 95) k5 = 95;
+  int oct = ((((from_deg % 360) + 360) % 360) + 22) / 45 % 8;
+  const int8_t *sv = DIR8[oct];
+  // Feathers sit on the left of the staff as seen looking downwind and slant toward its tip,
+  // about 63 degrees off a straight staff and 72 off a diagonal one, near the 70 used on
+  // weather maps. Both slopes are 2:1, which steps cleanly across whole pixels.
+  const int8_t *pv = DIR8[(oct + 2) % 8];
+  bool staff_diag = (oct & 1) != 0;
+  int staff = staff_diag ? 6 : 8;
+  int fx = staff_diag ? 3 * pv[0] + sv[0] : 4 * pv[0] + 2 * sv[0];
+  int fy = staff_diag ? 3 * pv[1] + sv[1] : 4 * pv[1] + 2 * sv[1];
+  int hx = fx / 2;
+  int hy = fy / 2;
+  int gap = 2;
+  barb_line(b, 0, 0, sv[0] * staff, sv[1] * staff);
+  int pos = staff;
+  int n50 = k5 / 50;
+  int n10 = (k5 % 50) / 10;
+  int n5 = (k5 % 10) ? 1 : 0;
+  // A lone half feather sits one step in from the tip, so it is not mistaken for a full one.
+  if (n50 == 0 && n10 == 0) pos -= gap;
+  int k;
+  for (k = 0; k < n50 && pos >= gap; k++) {
+    int tx = sv[0] * pos + fx;
+    int ty = sv[1] * pos + fy;
+    int j;
+    for (j = 0; j <= gap; j++) barb_line(b, sv[0] * (pos - j), sv[1] * (pos - j), tx, ty);
+    pos -= gap + 1;
+  }
+  for (k = 0; k < n10 && pos >= 1; k++) {
+    barb_line(b, sv[0] * pos, sv[1] * pos, sv[0] * pos + fx, sv[1] * pos + fy);
+    pos -= gap;
+  }
+  if (n5 && pos >= 1) {
+    barb_line(b, sv[0] * pos, sv[1] * pos, sv[0] * pos + hx, sv[1] * pos + hy);
+  }
+}
+
+// Draws a barb with its bounding box centered on (cx, cy).
+static void draw_barb(GContext *ctx, int cx, int cy, int from_deg, int knots, GColor color) {
+  Barb b;
+  build_barb(&b, from_deg, knots);
+  if (b.count == 0) return;
+  int minx = b.px[0].x, maxx = b.px[0].x, miny = b.px[0].y, maxy = b.px[0].y;
+  int k;
+  for (k = 1; k < b.count; k++) {
+    if (b.px[k].x < minx) minx = b.px[k].x;
+    if (b.px[k].x > maxx) maxx = b.px[k].x;
+    if (b.px[k].y < miny) miny = b.px[k].y;
+    if (b.px[k].y > maxy) maxy = b.px[k].y;
+  }
+  int ox = cx - (minx + maxx) / 2;
+  int oy = cy - (miny + maxy) / 2;
+  graphics_context_set_stroke_color(ctx, color);
+  for (k = 0; k < b.count; k++) graphics_draw_pixel(ctx, GPoint(ox + b.px[k].x, oy + b.px[k].y));
+}
+
+// Knots from the hour's speed, which is mph with Fahrenheit and km/h with Celsius.
+static int hour_knots(const FaceHour *hour) {
+  if (hour->wind_speed == FACE_NO_SPEED) return -1;
+  if (s_face.metric) return (hour->wind_speed * 54 + 50) / 100;
+  return (hour->wind_speed * 869 + 500) / 1000;
+}
+
+// The wind lane: speed is a soft area rising from the floor, and barbs every few hours give
+// direction and speed.
 static void draw_wind(GContext *ctx, const Theme *t) {
   int n = s_face.hour_count;
   int w = LAYOUT.plot.w;
@@ -838,40 +950,26 @@ static void draw_wind(GContext *ctx, const Theme *t) {
   int px;
   graphics_context_set_antialiased(ctx, false);
   graphics_context_set_stroke_width(ctx, 1);
-  // The area gets a brighter top edge so its shape reads on the night bands too.
+  // A plain area with no edge line, so nothing crosses the barbs drawn over it.
+  graphics_context_set_stroke_color(ctx, t->wind);
   for (px = 0; px < w; px++) {
     int h = field_at(px, &s_face.hours[0].wind_h, sizeof(FaceHour));
     if (h <= 0) continue;
     if (h > LAYOUT.wind.h) h = LAYOUT.wind.h;
     int x = LAYOUT.plot.x + px;
-    graphics_context_set_stroke_color(ctx, t->wind);
     graphics_draw_line(ctx, GPoint(x, floor_y - h), GPoint(x, floor_y - 1));
-    graphics_context_set_stroke_color(ctx, t->wind_edge);
-    graphics_draw_pixel(ctx, GPoint(x, floor_y - h));
   }
 
   int step = wind_step_hours();
-  int len = LAYOUT.wind.h - 2;
   int cy = top + LAYOUT.wind.h / 2;
   int i;
-  graphics_context_set_antialiased(ctx, true);
-  graphics_context_set_stroke_width(ctx, 1);
   for (i = 0; i < n; i++) {
     int secs = local_seconds(i);
     if (secs < 0 || (secs / 3600) % step != step / 2) continue;
     FaceHour hour = s_face.hours[i];
-    int x = LAYOUT.plot.x + column_mid(i, n, w);
-    if (hour.wind_dir == FACE_NO_DIR) continue;
-    if (hour.wind_h == 0) {
-      // Calm: a dot instead of an arrow.
-      graphics_context_set_fill_color(ctx, t->wind_arrow);
-      graphics_fill_circle(ctx, GPoint(x, cy), 1);
-      continue;
-    }
-    // Strong wind, from about 30 km/h (19 mph), turns its arrows warm.
-    bool strong = hour.wind_h * 5 >= LAYOUT.wind.h * 3;
-    graphics_context_set_stroke_color(ctx, strong ? t->wind_strong : t->wind_arrow);
-    draw_wind_arrow(ctx, x, cy, hour.wind_dir * 2, len);
+    int knots = hour_knots(&hour);
+    if (hour.wind_dir == FACE_NO_DIR || knots < 0) continue;
+    draw_barb(ctx, LAYOUT.plot.x + column_mid(i, n, w), cy, hour.wind_dir * 2, knots, t->wind_barb);
   }
 }
 
@@ -1026,7 +1124,7 @@ static void format_grouped(char *out, int value) {
   }
 }
 
-// The current hour's wind: an arrow the way it blows and the speed, with the unit when it fits.
+// The current hour's wind: a small barb and the speed, with the unit when it fits.
 static void draw_wind_now(GContext *ctx, const Theme *t, time_t now) {
   int i = hour_now(now);
   if (i < 0) return;
@@ -1035,8 +1133,8 @@ static void draw_wind_now(GContext *ctx, const Theme *t, time_t now) {
   GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_14);
   char text[16];
   snprintf(text, sizeof(text), "%d %s", hour.wind_speed, s_face.metric ? "km/h" : "mph");
-  bool arrow = hour.wind_dir != FACE_NO_DIR && hour.wind_speed > 0;
-  int arrow_w = arrow ? 11 : 0;
+  bool arrow = hour.wind_dir != FACE_NO_DIR;
+  int arrow_w = arrow ? 14 : 0;
   GSize size = text_size(text, font);
   if (arrow_w + size.w > LAYOUT.windnow.w - 6) {
     snprintf(text, sizeof(text), "%d", hour.wind_speed);
@@ -1044,11 +1142,8 @@ static void draw_wind_now(GContext *ctx, const Theme *t, time_t now) {
   }
   int x = LAYOUT.windnow.x + (LAYOUT.windnow.w - arrow_w - size.w) / 2;
   if (arrow) {
-    graphics_context_set_antialiased(ctx, true);
-    graphics_context_set_stroke_width(ctx, 1);
-    bool strong = hour.wind_h * 5 >= LAYOUT.wind.h * 3;
-    graphics_context_set_stroke_color(ctx, strong ? t->wind_strong : t->muted);
-    draw_wind_arrow(ctx, x + 4, LAYOUT.windnow.y + LAYOUT.windnow.h / 2 + 1, hour.wind_dir * 2, 9);
+    draw_barb(ctx, x + 5, LAYOUT.windnow.y + LAYOUT.windnow.h / 2 + 1, hour.wind_dir * 2,
+              hour_knots(&hour), t->muted);
   }
   draw_text(ctx, text, font,
             GRect(x + arrow_w, LAYOUT.windnow.y - 1, size.w + 2, LAYOUT.windnow.h + 2),
