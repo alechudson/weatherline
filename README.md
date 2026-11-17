@@ -15,6 +15,7 @@ The time is set in Inter Display SemiBold, included under the SIL Open Font Lice
 | ![Time 2, two days](screenshots/emery-2-day.png) | ![Round 2, two days](screenshots/gabbro-2-day.png) |
 | ![Time 2, five days](screenshots/emery-5-day.png) | ![Round 2, five days](screenshots/gabbro-5-day.png) |
 | ![Time 2, light theme](screenshots/emery-2-day-light.png) | ![Round 2, light theme](screenshots/gabbro-2-day-light.png) |
+| ![Time 2, mono theme](screenshots/emery-2-day-mono.png) | ![Round 2, mono theme](screenshots/gabbro-2-day-mono.png) |
 
 The bottom row shows today's steps, the current wind with an arrow the way it blows (mph with Fahrenheit, km/h with Celsius), and the battery. A red Bluetooth sign appears at the top right (top center on Round 2) when the phone is disconnected.
 
@@ -60,7 +61,7 @@ Open the config page from the Pebble phone app. There are four settings.
 - Days shown are 1, 2, 3, or 5. The default is 2.
 - The temperature unit is °F or °C. The default is °F.
 - Refresh is every 30 minutes, 45 minutes, or 1 hour. The default is 1 hour.
-- The theme is Dark or Light. The default is Dark.
+- The theme is Dark, Light or Mono. The default is Dark. Mono uses only black, white and grays: warmer than yesterday is a bright checker, colder is gray horizontal lines, and night is a light bar under the chart instead of a band behind it. The low-battery and Bluetooth warnings stay red.
 
 Changing the day count, the unit, or the theme redraws the forecast already stored on the phone. It does not download again.
 

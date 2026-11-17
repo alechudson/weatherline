@@ -45,10 +45,12 @@ test('the config page posts the three settings through pebblejs close', function
   assert.equal(html.indexOf('encodeURIComponent(JSON.stringify(payload))') > 0, true);
 });
 
-test('theme is dark or light, and anything else falls back to dark', function() {
+test('theme is dark, light or mono, and anything else falls back to dark', function() {
   var storage = memory();
   var light = settings.applyConfig(storage, encodeURIComponent(JSON.stringify({theme: 'light'})));
   assert.equal(light.theme, 'light');
+  var mono = settings.applyConfig(storage, encodeURIComponent(JSON.stringify({theme: 'mono'})));
+  assert.equal(mono.theme, 'mono');
   var odd = settings.applyConfig(storage, encodeURIComponent(JSON.stringify({theme: 'sepia'})));
   assert.equal(odd.theme, 'dark');
 });

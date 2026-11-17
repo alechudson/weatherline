@@ -18,6 +18,8 @@
 
 // The unit byte in the frame header carries this flag when the light theme is chosen.
 #define FACE_LIGHT_FLAG 0x10
+// And this one when the mono theme is chosen: black, white and grays only.
+#define FACE_MONO_FLAG 0x20
 
 #if defined(PBL_ROUND)
 #define FACE_PLATFORM 2
@@ -50,6 +52,7 @@ typedef struct {
 typedef struct {
   bool ok;
   bool light;
+  bool mono;
   bool metric;
   uint8_t hour_count;
   uint8_t day_count;
@@ -81,6 +84,10 @@ typedef struct {
   GColor wind_edge;
   GColor wind_arrow;
   GColor wind_strong;
+  // Mono has no hue to tell colder from warmer, so colder is drawn as stripes.
+  bool striped_colder;
+  // Mono marks night with a thin bar under the chart instead of a band behind it.
+  bool night_bar;
 } Theme;
 
 static Face s_face;
@@ -93,8 +100,32 @@ static const char *WEEKDAYS[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
 // colder than yesterday, blue only for water, and a quiet band for night.
 static Theme theme(void) {
   Theme t;
+  t.striped_colder = false;
+  t.night_bar = false;
   // Until the first forecast arrives, the face is dark.
-  if (s_face.light) {
+  if (s_face.mono) {
+    // Brightness carries the meaning: warmer is a bright checker, colder dim stripes, and
+    // night a dark gray band.
+    t.bg = GColorBlack;
+    t.text = GColorWhite;
+    t.muted = GColorLightGray;
+    t.line = GColorWhite;
+    t.grid = GColorDarkGray;
+    t.warmer = GColorWhite;
+    t.colder = GColorLightGray;
+    t.striped_colder = true;
+    t.night_bar = true;
+    t.rain = GColorLightGray;
+    t.snow = GColorWhite;
+    t.now = GColorWhite;
+    t.sky_cloud = GColorLightGray;
+    t.sky_night = GColorLightGray;
+    t.cloud_rim = GColorWhite;
+    t.wind = GColorDarkGray;
+    t.wind_edge = GColorLightGray;
+    t.wind_arrow = GColorLightGray;
+    t.wind_strong = GColorWhite;
+  } else if (s_face.light) {
     t.bg = GColorWhite;
     t.text = GColorBlack;
     t.muted = GColorDarkGray;
@@ -173,6 +204,7 @@ static bool unpack(Face *face, const uint8_t *data, int len) {
 
   face->ok = true;
   face->light = (data[2] & FACE_LIGHT_FLAG) != 0;
+  face->mono = !face->light && (data[2] & FACE_MONO_FLAG) != 0;
   face->metric = (data[2] & 0x0F) == 2;
   face->hour_count = hour_count;
   face->day_count = day_count;
@@ -281,7 +313,7 @@ static GColor backdrop_at(const Theme *t, int x) {
   int i = (px * n) / LAYOUT.plot.w;
   while (i > 0 && column_x(i, n, LAYOUT.plot.w) > px) i -= 1;
   while (i < n - 1 && column_x(i + 1, n, LAYOUT.plot.w) <= px) i += 1;
-  return s_face.hours[i].night ? t->sky_night : t->bg;
+  return s_face.hours[i].night && !t->night_bar ? t->sky_night : t->bg;
 }
 
 // Text that sits on the chart gets a one-pixel halo in whatever color is behind it.
@@ -328,9 +360,13 @@ static void draw_night(GContext *ctx, const Theme *t) {
     while (j < n && s_face.hours[j].night) j += 1;
     int x0 = column_x(i, n, w);
     int x1 = column_x(j, n, w);
-    graphics_context_set_fill_color(ctx, t->sky_night);
-    graphics_fill_rect(ctx, GRect(LAYOUT.plot.x + x0, top, x1 - x0, bottom - top), 3,
-                       GCornersAll);
+    if (t->night_bar) {
+      fill_rect(ctx, LAYOUT.plot.x + x0, bottom, x1 - x0, 2, t->sky_night);
+    } else {
+      graphics_context_set_fill_color(ctx, t->sky_night);
+      graphics_fill_rect(ctx, GRect(LAYOUT.plot.x + x0, top, x1 - x0, bottom - top), 3,
+                         GCornersAll);
+    }
     i = j;
   }
 }
@@ -435,6 +471,7 @@ static void draw_fronts(GContext *ctx, const Theme *t) {
     int x = LAYOUT.plot.x + px;
     int y0;
     int y1;
+    bool striped = false;
     if (prev_y > now_y + 1) {
       graphics_context_set_stroke_color(ctx, t->warmer);
       y0 = now_y;
@@ -443,11 +480,19 @@ static void draw_fronts(GContext *ctx, const Theme *t) {
       graphics_context_set_stroke_color(ctx, t->colder);
       y0 = prev_y;
       y1 = now_y;
+      striped = t->striped_colder;
     } else {
       continue;
     }
     // A checkerboard reads as a softer tone than a solid fill, so the line stays on top.
     int y;
+    if (striped) {
+      // Every other row, so colder reads as horizontal lines rather than a checker.
+      for (y = y0 + 1; y < y1; y++) {
+        if (((LAYOUT.plot.y + y) & 1) == 0) graphics_draw_pixel(ctx, GPoint(x, LAYOUT.plot.y + y));
+      }
+      continue;
+    }
     for (y = y0 + ((y0 + px) & 1); y < y1; y += 2) {
       graphics_draw_pixel(ctx, GPoint(x, LAYOUT.plot.y + y));
     }

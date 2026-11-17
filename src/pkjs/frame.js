@@ -11,6 +11,7 @@ var NO_DIR = 255;
 // The wind lane is full at this speed.
 var WIND_FULL_KMH = 50;
 var LIGHT_FLAG = 0x10;
+var MONO_FLAG = 0x20;
 
 // Both watches use the same centered stack: the time, one line with the temperature,
 // date and place, a sky lane, the chart, wind, precipitation, then steps and battery.
@@ -391,8 +392,9 @@ function buildFrame(forecastValue, settings, platform, nowUnix) {
   var o = 0;
   o = putU8(bytes, o, VERSION);
   o = putU8(bytes, o, platform === 'gabbro' ? 2 : 1);
-  // Low bits: 1 for F, 2 for C. LIGHT_FLAG asks the watch for the light theme.
-  o = putU8(bytes, o, (unit === 'C' ? 2 : 1) | (settings.theme === 'light' ? LIGHT_FLAG : 0));
+  // Low bits: 1 for F, 2 for C. LIGHT_FLAG or MONO_FLAG asks the watch for that theme.
+  var themeFlag = settings.theme === 'light' ? LIGHT_FLAG : (settings.theme === 'mono' ? MONO_FLAG : 0);
+  o = putU8(bytes, o, (unit === 'C' ? 2 : 1) | themeFlag);
   o = putU8(bytes, o, n);
   o = putU32(bytes, o, forecastValue.fetchedAt || 0);
   o = putU32(bytes, o, selected[0].time);
@@ -482,7 +484,7 @@ function unpackFrame(bytes) {
     version: bytes[0],
     platform: bytes[1] === 2 ? 'gabbro' : 'emery',
     unit: (unitByte & 15) === 2 ? 'C' : 'F',
-    theme: unitByte & LIGHT_FLAG ? 'light' : 'dark',
+    theme: unitByte & LIGHT_FLAG ? 'light' : (unitByte & MONO_FLAG ? 'mono' : 'dark'),
     hourCount: hourCount,
     fetchedAt: readU32(bytes, 4),
     windowStart: readU32(bytes, 8),

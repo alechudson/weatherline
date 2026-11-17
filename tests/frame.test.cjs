@@ -190,3 +190,12 @@ test('the light theme sets a flag beside the unit without changing it', function
   assert.equal(dark.theme, 'dark');
   assert.equal(dark.unit, 'F');
 });
+
+test('the mono theme sets its own flag and keeps the unit', function() {
+  var bytes = frame.buildFrame(fixtureForecast('Hill'),
+    {days: 2, unit: 'C', refreshMin: 60, theme: 'mono'}, 'emery', NOW);
+  var mono = frame.unpackFrame(bytes);
+  assert.equal(mono.theme, 'mono');
+  assert.equal(mono.unit, 'C');
+  assert.equal(bytes[2], 0x22);
+});
