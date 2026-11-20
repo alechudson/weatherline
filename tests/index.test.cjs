@@ -214,7 +214,7 @@ test('a later fetch for the same place keeps the known place name', async functi
   await settle();
   await settle();
   answer(app.requests[0], forecastBody());
-  assert.ok(app.requests[1].url.indexOf('bigdatacloud') >= 0, 'the first fetch asks for the place');
+  assert.ok(app.requests[1].url.indexOf('api-bdc.io/data/reverse-geocode-client') >= 0, 'the first fetch asks for the place');
   answer(app.requests[1], JSON.stringify({city: 'Austin'}));
 
   Date.now = function() { return NOW_MS + 61 * 60000; };
@@ -226,6 +226,39 @@ test('a later fetch for the same place keeps the known place name', async functi
   assert.equal(app.requests.length, 3, 'without asking for the place again');
   var cache = JSON.parse(app.storage.getItem('weatherline.forecast') || 'null');
   if (cache) assert.equal(cache.place, 'Austin');
+});
+
+test('a failed place lookup is retried on the next refresh without a new download', async function(t) {
+  var realNow = Date.now;
+  Date.now = function() { return NOW_MS; };
+  var first = boot({watchInfo: {platform: 'emery'}});
+  first.listeners.ready();
+  await settle();
+  await settle();
+  answer(first.requests[0], forecastBody());
+  var place = first.requests[1];
+  place.status = 0;
+  place.onerror();
+  first.restore();
+  var cache = JSON.parse(first.storage.getItem('weatherline.forecast'));
+  assert.equal(cache.place, '', 'the failed lookup leaves no name');
+
+  // The face restarts ten minutes later, outside the recently-checked window.
+  first.storage.removeItem('weatherline.checkedAt');
+  Date.now = function() { return NOW_MS + 10 * 60000; };
+  var app = boot({watchInfo: {platform: 'emery'}, storage: first.storage});
+  t.after(function() {
+    app.restore();
+    Date.now = realNow;
+  });
+  app.listeners.ready();
+  await settle();
+  await settle();
+  assert.equal(app.requests.length, 1, 'only the place is requested');
+  assert.ok(app.requests[0].url.indexOf('api-bdc.io/data/reverse-geocode-client') >= 0);
+  answer(app.requests[0], JSON.stringify({city: 'Austin'}));
+  cache = JSON.parse(app.storage.getItem('weatherline.forecast'));
+  assert.equal(cache.place, 'Austin');
 });
 
 function readU32(bytes, offset) {

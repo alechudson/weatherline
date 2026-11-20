@@ -198,7 +198,7 @@ function parseCoords(text) {
 }
 
 function placeUrl(lat, lon) {
-  return 'https://api.bigdatacloud.net/data/reverse-geocode-client?latitude='
+  return 'https://api-bdc.io/data/reverse-geocode-client?latitude='
     + Number(lat) + '&longitude=' + Number(lon) + '&localityLanguage=en';
 }
 

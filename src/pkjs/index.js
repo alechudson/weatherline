@@ -340,6 +340,8 @@ function cycle(sendFirst) {
     if (skipFetch(cached, fix, st)) {
       // The frame can still change without a fetch, at midnight say.
       sendForecast(cached);
+      // A place lookup that failed earlier is retried without downloading the forecast again.
+      if (!cached.place) requestPlace(cached.lat, cached.lon, gen);
       finish(gen, true);
       return;
     }
