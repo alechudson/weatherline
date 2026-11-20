@@ -64,7 +64,7 @@ function boot(options) {
     return originalResolve.apply(this, arguments);
   };
   require.cache.message_keys = {id: 'message_keys', filename: 'message_keys', loaded: true,
-    exports: {PAYLOAD: 10000, REQUEST: 10001}};
+    exports: {PAYLOAD: 10000, REQUEST: 10001, TOPLINE: 10002}};
   var file = path.join(__dirname, '..', 'src', 'pkjs', 'index.js');
   delete require.cache[require.resolve(file)];
   require(file);
@@ -214,4 +214,75 @@ test('a later fetch for the same place keeps the known place name', async functi
   assert.equal(app.requests.length, 3, 'without asking for the place again');
   var cache = JSON.parse(app.storage.getItem('weatherline.forecast') || 'null');
   if (cache) assert.equal(cache.place, 'Austin');
+});
+
+function readU32(bytes, offset) {
+  return (bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24)) >>> 0;
+}
+
+test('saving the top line redraws the stored forecast without a new download', async function(t) {
+  var realNow = Date.now;
+  Date.now = function() { return NOW_MS; };
+  var app = boot({watchInfo: {platform: 'emery'}});
+  t.after(function() {
+    app.restore();
+    Date.now = realNow;
+  });
+
+  app.listeners.ready();
+  await settle();
+  await settle();
+  answer(app.requests[0], forecastBody());
+  var requests = app.requests.length;
+  var sent = app.sent.length;
+  app.listeners.webviewclosed({
+    response: encodeURIComponent(JSON.stringify({
+      days: 2, unit: 'F', refreshMin: 60, theme: 'dark', topLine: 'updated'
+    }))
+  });
+  assert.equal(app.requests.length, requests, 'no new download');
+  assert.equal(app.sent.length, sent + 1, 'the stored forecast is sent again');
+  var bytes = app.sent[app.sent.length - 1][10000];
+  assert.ok(bytes[2] & 0x40, 'the frame asks for the last-updated line');
+  assert.equal(readU32(bytes, 4), 1794790800, 'and the fetch time is unchanged');
+});
+
+test('saving the top line before any forecast tells the watch on its own', function(t) {
+  var app = boot({watchInfo: {platform: 'gabbro'}});
+  t.after(function() { app.restore(); });
+  app.listeners.webviewclosed({
+    response: encodeURIComponent(JSON.stringify({topLine: 'updated'}))
+  });
+  assert.equal(app.sent.length, 1);
+  assert.equal(app.sent[0][10002], 1);
+  assert.equal(app.sent[0][10000], undefined);
+});
+
+test('a failed refresh keeps the last successful fetch time', async function(t) {
+  var realNow = Date.now;
+  Date.now = function() { return NOW_MS; };
+  var app = boot({watchInfo: {platform: 'emery'}});
+  t.after(function() {
+    app.restore();
+    Date.now = realNow;
+  });
+
+  app.listeners.ready();
+  await settle();
+  await settle();
+  answer(app.requests[0], forecastBody());
+  answer(app.requests[1], JSON.stringify({city: 'Austin'}));
+
+  Date.now = function() { return NOW_MS + 61 * 60000; };
+  app.listeners.appmessage({payload: {REQUEST: 1}});
+  await settle();
+  await settle();
+  var xhr = app.requests[app.requests.length - 1];
+  xhr.status = 500;
+  xhr.responseText = '';
+  xhr.onload();
+  var cache = JSON.parse(app.storage.getItem('weatherline.forecast'));
+  assert.equal(cache.fetchedAt, 1794790800);
+  var bytes = app.sent[app.sent.length - 1][10000];
+  assert.equal(readU32(bytes, 4), 1794790800);
 });

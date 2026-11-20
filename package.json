@@ -15,7 +15,7 @@
       "watchface": true
     },
     "capabilities": ["configurable", "location", "health"],
-    "messageKeys": ["PAYLOAD", "REQUEST"],
+    "messageKeys": ["PAYLOAD", "REQUEST", "TOPLINE"],
     "usesPermissions": [
       "Location",
       {

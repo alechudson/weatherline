@@ -199,3 +199,19 @@ test('the mono theme sets its own flag and keeps the unit', function() {
   assert.equal(mono.unit, 'C');
   assert.equal(bytes[2], 0x22);
 });
+
+test('the top line flag rides with the unit and does not restamp the fetch time', function() {
+  var forecastValue = fixtureForecast('Hill');
+  forecastValue.fetchedAt = NOW - 3600;
+  var bytes = frame.buildFrame(forecastValue,
+    {days: 2, unit: 'C', refreshMin: 60, theme: 'light', topLine: 'updated'}, 'emery', NOW);
+  var updated = frame.unpackFrame(bytes);
+  assert.equal(bytes[2], 0x52);
+  assert.equal(updated.topLine, 'updated');
+  assert.equal(updated.theme, 'light');
+  assert.equal(updated.unit, 'C');
+  assert.equal(updated.fetchedAt, NOW - 3600);
+  var wind = frame.unpackFrame(frame.buildFrame(forecastValue, settings(2, 'F'), 'emery', NOW));
+  assert.equal(wind.topLine, 'wind');
+  assert.equal(wind.fetchedAt, NOW - 3600);
+});

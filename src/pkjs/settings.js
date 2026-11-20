@@ -1,7 +1,7 @@
 var SETTINGS_KEY = 'weatherline.settings';
 
 function defaults() {
-  return {days: 2, unit: 'F', refreshMin: 60, theme: 'dark'};
+  return {days: 2, unit: 'F', refreshMin: 60, theme: 'dark', topLine: 'wind'};
 }
 
 function normalize(raw) {
@@ -13,6 +13,8 @@ function normalize(raw) {
   if (raw.refreshMin === 30 || raw.refreshMin === 45 || raw.refreshMin === 60) {
     out.refreshMin = raw.refreshMin;
   }
+  // Wind is the default, so a stored settings blob from before this choice stays on wind.
+  if (raw.topLine === 'wind' || raw.topLine === 'updated') out.topLine = raw.topLine;
   return out;
 }
 
@@ -97,6 +99,10 @@ function configPage(settings) {
       {value: 'light', label: 'Light'},
       {value: 'mono', label: 'Mono'}
     ], s.theme)
+    + group('Top line', 'Wind speed, or the local time the forecast last arrived. A time that does not move means new forecasts are not getting through.', 'topLine', [
+      {value: 'wind', label: 'Wind speed'},
+      {value: 'updated', label: 'Last updated'}
+    ], s.topLine)
     + '<button type="button" id="save">Save</button></form>'
     + '<p class="credit">Weather data by Open-Meteo.com (CC BY 4.0). '
     + 'Place names by BigDataCloud.</p><script>'
@@ -105,7 +111,8 @@ function configPage(settings) {
     + 'var unit=document.querySelector("input[name=unit]:checked").value;'
     + 'var refreshMin=Number(document.querySelector("input[name=refreshMin]:checked").value);'
     + 'var theme=document.querySelector("input[name=theme]:checked").value;'
-    + 'var payload={days:days,unit:unit,refreshMin:refreshMin,theme:theme};'
+    + 'var topLine=document.querySelector("input[name=topLine]:checked").value;'
+    + 'var payload={days:days,unit:unit,refreshMin:refreshMin,theme:theme,topLine:topLine};'
     + 'location.href="pebblejs://close#"+encodeURIComponent(JSON.stringify(payload));'
     + '});</script></body></html>';
   return 'data:text/html;charset=utf-8,' + encodeURIComponent(html);

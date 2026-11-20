@@ -21,7 +21,7 @@ Screenshots are color-corrected for the real panel.
 | ![Time 2, light theme](screenshots/emery-2-day-light.png) | ![Round 2, light theme](screenshots/gabbro-2-day-light.png) |
 | ![Time 2, mono theme](screenshots/emery-2-day-mono.png) | ![Round 2, mono theme](screenshots/gabbro-2-day-mono.png) |
 
-The top row shows today's steps, the current wind as a barb and a speed (mph with Fahrenheit, km/h with Celsius), and the battery. A red Bluetooth sign appears left of the time (top center on Round 2) when the phone is disconnected.
+The top row shows today's steps, the current wind as a barb and a speed (mph with Fahrenheit, km/h with Celsius), and the battery. The center of that row can instead show the local time of the last forecast that arrived, chosen in settings. A red Bluetooth sign appears left of the time (top center on Round 2) when the phone is disconnected.
 
 ## The screen
 
@@ -64,14 +64,15 @@ pebble install --phone <ip>
 
 ## Settings
 
-Open the config page from the Pebble phone app. There are four settings.
+Open the config page from the Pebble phone app. There are five settings.
 
 - Days shown are 1, 2, 3, or 5. The default is 2.
 - The temperature unit is °F or °C. The default is °F.
 - Refresh is every 30 minutes, 45 minutes, or 1 hour. The default is 1 hour.
 - The theme is Dark, Light or Mono. The default is Dark. Mono uses only black, white and grays: warmer than yesterday is a bright checker, colder is gray horizontal lines, and night is a light bar under the chart instead of a band behind it. The low-battery and Bluetooth warnings stay red.
+- The top line is Wind speed or Last updated. The default is Wind speed. Last updated shows a small refresh mark and the local time of the last successful fetch, following the watch's 12- or 24-hour setting, as in the mark beside `11:42`. It is kept on the watch, so it is still there after the app restarts. Before the first successful fetch the time is `--:--`, mark and all, and it changes only when a fetch succeeds, so a time that does not move means fetches are failing.
 
-Changing the day count, the unit, or the theme redraws the forecast already stored on the phone. It does not download again.
+Changing the day count, the unit, the theme, or the top line redraws the forecast already stored on the phone. It does not download again, and the watch applies it without a restart.
 
 The phone tries a network location first, then GPS, and keeps the last fix. The watch also asks the phone for a refresh every hour and when Bluetooth reconnects, so the forecast stays current even if the phone pauses the app in the background. To save the watch's battery, the phone answers a request that comes within the refresh interval of its last good refresh without checking again, sends the watch a frame only when it differs from the last one the watch received, and looks up the place name only when the location changes. The watch also skips saving a frame that matches the one it has stored. If a refresh fails, the watch keeps showing the last forecast, and the temperature follows the forecast hour by hour until it runs out.
 
