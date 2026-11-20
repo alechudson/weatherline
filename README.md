@@ -68,13 +68,13 @@ Open the config page from the Pebble phone app. There are five settings.
 
 - Days shown are 1, 2, 3, or 5. The default is 2.
 - The temperature unit is °F or °C. The default is °F.
-- Refresh is every 30 minutes, 45 minutes, or 1 hour. The default is 1 hour.
+- Refresh is every 30 minutes, 45 minutes, 1 hour, 2 hours, or 3 hours. The default is 1 hour.
 - The theme is Dark, Light or Mono. The default is Dark. Mono uses only black, white and grays: warmer than yesterday is a bright checker, colder is gray horizontal lines, and night is a light bar under the chart instead of a band behind it. The low-battery and Bluetooth warnings stay red.
 - The top line is Wind speed or Last updated. The default is Wind speed. Last updated shows a small refresh mark and the local time of the last successful fetch, following the watch's 12- or 24-hour setting, as in the mark beside `11:42`. It is kept on the watch, so it is still there after the app restarts. Before the first successful fetch the time is `--:--`, mark and all, and it changes only when a fetch succeeds, so a time that does not move means fetches are failing.
 
 Changing the day count, the unit, the theme, or the top line redraws the forecast already stored on the phone. It does not download again, and the watch applies it without a restart.
 
-The phone tries a network location first, then GPS, and keeps the last fix. The watch also asks the phone for a refresh every hour and when Bluetooth reconnects, so the forecast stays current even if the phone pauses the app in the background. To save the watch's battery, the phone answers a request that comes within the refresh interval of its last good refresh without checking again, sends the watch a frame only when it differs from the last one the watch received, and looks up the place name only when the location changes. The watch also skips saving a frame that matches the one it has stored. If a refresh fails, the watch keeps showing the last forecast, and the temperature follows the forecast hour by hour until it runs out.
+The phone tries a network location first (accepting fixes up to 15 minutes old), reuses a recent cached fix instead of waking GPS indoors, and only falls back to GPS if no fix from the last 6 hours is available. The watch asks the phone for a refresh only when its stored forecast is missing or past the configured refresh interval (and stays silent over Bluetooth during Quiet Time while the forecast still covers the current hour). To save watch and phone battery, the phone persists its last refresh timestamp and frame hash across restarts so returning to the watchface does not re-check location or resend an unchanged frame, bit-packs hourly records to shrink Bluetooth transfers and flash writes, looks up the place name only when the location changes, and caches the static chart on the watch so normal minute ticks repaint only the time band. If a refresh fails, the watch keeps showing the last forecast, and the temperature follows the forecast hour by hour until it runs out.
 
 ## Credits
 

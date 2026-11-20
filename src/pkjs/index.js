@@ -11,14 +11,26 @@ var attempts = 0;
 var retryTimer = null;
 var refreshTimer = null;
 var busySince = 0;
-// What the watch last acknowledged, so an unchanged frame is not sent again. Bluetooth and
-// the watch's flash write cost far more battery than building the frame on the phone.
-var lastSent = null;
-// When a refresh last checked the location and had a forecast to show, in ms.
-var checkedAt = 0;
-
 var PLATFORM_KEY = 'weatherline.platform';
+var CHECKED_KEY = 'weatherline.checkedAt';
+var SENT_HASH_KEY = 'weatherline.lastSentHash';
 var PLATFORM_CODES = {1: 'emery', 2: 'gabbro'};
+var REQUEST_NEED_FRAME = 0x80;
+var MAX_SEND_RETRIES = 3;
+
+function readCheckedAt() {
+  var raw = localStorage.getItem(CHECKED_KEY);
+  if (!raw) return 0;
+  var n = Number(raw);
+  return typeof n === 'number' && isFinite(n) && n > 0 ? n : 0;
+}
+
+// What the watch last acknowledged, persisted by hash across JS restarts so switching
+// away from the watchface and back does not re-send an unchanged frame over Bluetooth.
+var lastSent = null;
+var lastSentHash = localStorage.getItem(SENT_HASH_KEY) || null;
+// When a refresh last checked the location and had a forecast to show, in ms.
+var checkedAt = readCheckedAt();
 
 function isNum(value) {
   return typeof value === 'number' && isFinite(value);
@@ -58,6 +70,16 @@ function geolocate(highAccuracy) {
   });
 }
 
+function frameHash(bytes) {
+  var h = 2166136261;
+  var i;
+  for (i = 0; i < bytes.length; i++) {
+    h ^= bytes[i];
+    h = (h + (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24)) >>> 0;
+  }
+  return bytes.length + ':' + h.toString(16);
+}
+
 function sameBytes(a, b) {
   if (!a || !b || a.length !== b.length) return false;
   var i;
@@ -68,7 +90,14 @@ function sameBytes(a, b) {
 }
 
 function queueSend(item) {
-  if (sameBytes(item.bytes, pending ? pending.bytes : lastSent)) return false;
+  item.hash = frameHash(item.bytes);
+  if (pending) {
+    if (sameBytes(item.bytes, pending.bytes)) return false;
+  } else if (lastSent) {
+    if (sameBytes(item.bytes, lastSent)) return false;
+  } else if (lastSentHash && item.hash === lastSentHash) {
+    return false;
+  }
   pending = item;
   attempts = 0;
   if (retryTimer) {
@@ -92,6 +121,8 @@ function sendPending() {
     inflight = false;
     console.log('weatherline sent ' + item.lat + ' ' + item.lon + ' hours ' + item.hours);
     lastSent = item.bytes;
+    lastSentHash = item.hash;
+    localStorage.setItem(SENT_HASH_KEY, lastSentHash);
     if (pending === item) pending = null;
     attempts = 0;
     if (pending) sendPending();
@@ -103,15 +134,16 @@ function sendPending() {
       return;
     }
     attempts += 1;
-    if (attempts > 5) {
+    if (attempts > MAX_SEND_RETRIES) {
       pending = null;
       attempts = 0;
       return;
     }
+    var delay = 2000 * (1 << (attempts - 1));
     retryTimer = setTimeout(function() {
       retryTimer = null;
       sendPending();
-    }, 2000);
+    }, delay);
   });
 }
 
@@ -120,12 +152,11 @@ function sendForecast(cached) {
   var st = settings.readSettings(localStorage);
   var bytes = frame.buildFrame(cached, st, watchPlatform(), nowUnix());
   if (!bytes) return false;
-  var unpacked = frame.unpackFrame(bytes);
   return queueSend({
     bytes: bytes,
     lat: cached.lat,
     lon: cached.lon,
-    hours: unpacked ? unpacked.hourCount : 0
+    hours: bytes[3]
   });
 }
 
@@ -144,13 +175,14 @@ function skipFetch(cached, fix, st) {
   return locate.samePlace(cached, fix);
 }
 
-function armRefresh() {
+function armRefresh(delayMs) {
   if (refreshTimer) clearTimeout(refreshTimer);
   var st = settings.readSettings(localStorage);
+  var wait = isNum(delayMs) && delayMs >= 1000 ? delayMs : st.refreshMin * 60000;
   refreshTimer = setTimeout(function() {
     refreshTimer = null;
     cycle();
-  }, st.refreshMin * 60000);
+  }, wait);
 }
 
 // `checked` is true when this refresh found the location and has a current forecast; only
@@ -158,7 +190,10 @@ function armRefresh() {
 function finish(gen, checked) {
   if (gen !== generation) return;
   busySince = 0;
-  if (checked) checkedAt = Date.now();
+  if (checked) {
+    checkedAt = Date.now();
+    localStorage.setItem(CHECKED_KEY, String(checkedAt));
+  }
   armRefresh();
 }
 
@@ -272,6 +307,15 @@ function busy() {
 }
 
 Pebble.addEventListener('ready', function() {
+  var cached = forecast.readCache(localStorage);
+  if (cached && recentlyChecked()) {
+    // Re-launching the watchface inside the refresh window skips geolocation and network;
+    // the cached frame only goes over Bluetooth if it changed (at midnight, say).
+    sendForecast(cached);
+    var st = settings.readSettings(localStorage);
+    armRefresh(st.refreshMin * 60000 - (Date.now() - checkedAt));
+    return;
+  }
   cycle(true);
 });
 
@@ -279,22 +323,33 @@ Pebble.addEventListener('ready', function() {
 function recentlyChecked() {
   if (!checkedAt) return false;
   var st = settings.readSettings(localStorage);
-  return Date.now() - checkedAt < st.refreshMin * 60000;
+  var elapsed = Date.now() - checkedAt;
+  return elapsed >= 0 && elapsed < st.refreshMin * 60000;
 }
 
 Pebble.addEventListener('appmessage', function(e) {
   var payload = (e && e.payload) || {};
-  var code = payload.REQUEST;
-  if (code === undefined) code = payload[messageKeys.REQUEST];
-  if (code === undefined) return;
+  var raw = payload.REQUEST;
+  if (raw === undefined) raw = payload[messageKeys.REQUEST];
+  if (raw === undefined) return;
+  var needFrame = (raw & REQUEST_NEED_FRAME) !== 0;
+  var code = raw & 0x0F;
   if (PLATFORM_CODES[code]) localStorage.setItem(PLATFORM_KEY, PLATFORM_CODES[code]);
-  if (busy()) return;
+  if (needFrame) {
+    lastSent = null;
+    lastSentHash = null;
+    localStorage.removeItem(SENT_HASH_KEY);
+  }
+  if (busy()) {
+    if (needFrame) sendForecast(forecast.readCache(localStorage));
+    return;
+  }
   if (recentlyChecked()) {
     // Nothing new to fetch; the watch gets the stored frame only if it has changed.
     sendForecast(forecast.readCache(localStorage));
     return;
   }
-  cycle(false);
+  cycle(needFrame);
 });
 
 Pebble.addEventListener('showConfiguration', function() {

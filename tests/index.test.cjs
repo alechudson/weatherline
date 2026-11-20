@@ -20,10 +20,13 @@ function boot(options) {
   var listeners = {};
   var sent = [];
   var requests = [];
+  var timers = [];
   var geoCalls = 0;
-  var storage = memory();
-  var cachedFix = JSON.stringify({lat: 30, lon: -97, at: NOW_MS});
-  storage.setItem('weatherline.fix', cachedFix);
+  var storage = options.storage || memory();
+  if (!options.storage) {
+    var cachedFix = JSON.stringify({lat: 30, lon: -97, at: NOW_MS});
+    storage.setItem('weatherline.fix', cachedFix);
+  }
 
   function FakeXhr() {
     requests.push(this);
@@ -35,7 +38,11 @@ function boot(options) {
     Pebble: {
       addEventListener: function(name, fn) { listeners[name] = fn; },
       getActiveWatchInfo: function() { return options.watchInfo || null; },
-      sendAppMessage: function(dict, ok) { sent.push(dict); ok(); },
+      sendAppMessage: function(dict, ok, fail) {
+        sent.push(dict);
+        if (options.failSend) fail();
+        else ok();
+      },
       openURL: function() {}
     },
     localStorage: storage,
@@ -49,7 +56,11 @@ function boot(options) {
     },
     XMLHttpRequest: FakeXhr,
     // Refresh and retry timers are recorded, never run, so the test process can exit.
-    setTimeout: function() { return {}; },
+    setTimeout: function(fn, ms) {
+      var timer = {fn: fn, ms: ms};
+      timers.push(timer);
+      return timer;
+    },
     clearTimeout: function() {}
   };
   var saved = {};
@@ -74,6 +85,7 @@ function boot(options) {
     listeners: listeners,
     sent: sent,
     requests: requests,
+    timers: timers,
     storage: storage,
     geoCalls: function() { return geoCalls; },
     restore: function() {
@@ -285,4 +297,65 @@ test('a failed refresh keeps the last successful fetch time', async function(t) 
   assert.equal(cache.fetchedAt, 1794790800);
   var bytes = app.sent[app.sent.length - 1][10000];
   assert.equal(readU32(bytes, 4), 1794790800);
+});
+
+test('restarting PKJS inside the refresh window skips geo, network, and Bluetooth', async function(t) {
+  var realNow = Date.now;
+  Date.now = function() { return NOW_MS; };
+  var app1 = boot({watchInfo: {platform: 'emery'}});
+  t.after(function() {
+    app1.restore();
+    Date.now = realNow;
+  });
+
+  app1.listeners.ready();
+  await settle();
+  await settle();
+  answer(app1.requests[0], forecastBody());
+  answer(app1.requests[1], JSON.stringify({city: 'Austin'}));
+  var shared = app1.storage;
+  app1.restore();
+
+  Date.now = function() { return NOW_MS + 15 * 60000; };
+  var app2 = boot({watchInfo: {platform: 'emery'}, storage: shared});
+  t.after(function() { app2.restore(); });
+
+  app2.listeners.ready();
+  await settle();
+  await settle();
+  assert.equal(app2.geoCalls(), 0, 'no geolocation on restart within interval');
+  assert.equal(app2.requests.length, 0, 'no network fetch on restart within interval');
+  assert.equal(app2.sent.length, 0, 'no redundant Bluetooth transfer');
+  assert.equal(app2.timers.length, 1, 'refresh timer armed for remaining time');
+  assert.equal(app2.timers[0].ms, 45 * 60000);
+
+  // If the watch asks with the need-frame flag (0x80), the phone clears the hash and sends.
+  app2.listeners.appmessage({payload: {REQUEST: 0x81}});
+  assert.equal(app2.sent.length, 1, 'watch with empty storage receives the cached frame');
+});
+
+test('failed AppMessage sends back off exponentially and stop after 3 retries', async function(t) {
+  var realNow = Date.now;
+  Date.now = function() { return NOW_MS; };
+  var app = boot({watchInfo: {platform: 'emery'}, failSend: true});
+  t.after(function() {
+    app.restore();
+    Date.now = realNow;
+  });
+
+  app.listeners.ready();
+  await settle();
+  await settle();
+  answer(app.requests[0], forecastBody());
+  // First attempt failed and scheduled a 2s retry.
+  var retryDelays = [];
+  while (true) {
+    var retry = app.timers.find(function(x) { return x.ms < 60000; });
+    if (!retry) break;
+    retryDelays.push(retry.ms);
+    app.timers.splice(app.timers.indexOf(retry), 1);
+    retry.fn();
+  }
+  assert.deepEqual(retryDelays, [2000, 4000, 8000]);
+  assert.equal(app.sent.length, 4, 'initial attempt plus 3 retries');
 });

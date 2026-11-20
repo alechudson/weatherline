@@ -1,4 +1,6 @@
 var FIX_KEY = 'weatherline.fix';
+// If network location fails indoors, reuse a cached fix up to this old before waking GPS.
+var GPS_CACHE_MAX_MS = 6 * 3600 * 1000;
 
 function isNum(value) {
   return typeof value === 'number' && isFinite(value);
@@ -8,7 +10,7 @@ function geoOptions(highAccuracy) {
   if (highAccuracy) {
     return {enableHighAccuracy: true, timeout: 15000, maximumAge: 0};
   }
-  return {enableHighAccuracy: false, timeout: 8000, maximumAge: 300000};
+  return {enableHighAccuracy: false, timeout: 8000, maximumAge: 900000};
 }
 
 function samePlace(a, b) {
@@ -87,16 +89,25 @@ function tryFix(opts, highAccuracy) {
   });
 }
 
+function cachedFreshForGpsSkip(cached, nowMs) {
+  if (!cached || !isNum(cached.at) || !isNum(nowMs)) return false;
+  var age = nowMs - cached.at;
+  return age >= 0 && age <= GPS_CACHE_MAX_MS;
+}
+
 function resolveFix(opts) {
   return tryFix(opts, false).then(function(fix) {
     if (fix) return fix;
-    return tryFix(opts, true);
-  }).then(function(fix) {
-    if (fix) return fix;
     if (!alive(opts)) return null;
     var cached = readFix(opts.storage);
-    if (!cached) return null;
-    return {lat: cached.lat, lon: cached.lon};
+    if (cachedFreshForGpsSkip(cached, opts.nowMs)) {
+      return {lat: cached.lat, lon: cached.lon};
+    }
+    return tryFix(opts, true).then(function(gpsFix) {
+      if (gpsFix) return gpsFix;
+      if (!alive(opts) || !cached) return null;
+      return {lat: cached.lat, lon: cached.lon};
+    });
   });
 }
 

@@ -2,12 +2,13 @@ var forecast = require('./forecast');
 
 // Version 2 adds yesterday's row to each hour; version 3 adds wind to each hour, and
 // each hour's temperature and wind speed in the chosen units so the watch can show the
-// current hour on its own when the phone has not refreshed.
-var VERSION = 3;
-var HOUR_BYTES = 10;
+// current hour on its own when the phone has not refreshed; version 4 bit-packs hourly
+// fields from 10 bytes to 7 and carries the refresh interval in header byte 23.
+var VERSION = 4;
+var HOUR_BYTES = 7;
 var NO_SPEED = 255;
 var DAY_BYTES = 8;
-var NO_DIR = 255;
+var NO_DIR = 15;
 // The wind lane is full at this speed.
 var WIND_FULL_KMH = 50;
 var LIGHT_FLAG = 0x10;
@@ -105,10 +106,10 @@ function degByte(celsius, unit) {
   return Math.max(-127, Math.min(127, whole(celsius, unit)));
 }
 
-// Direction the wind comes from, in 2-degree steps.
-function dirByte(deg) {
+// Direction the wind comes from, snapped to 8 compass octants (0=N..7=NW) or NO_DIR.
+function dirOctant(deg) {
   if (!isNum(deg)) return NO_DIR;
-  return Math.round((((deg % 360) + 360) % 360) / 2) % 180;
+  return Math.floor(((((deg % 360) + 360) % 360) + 22.5) / 45) % 8;
 }
 
 function localMidnight(unix, offset) {
@@ -347,7 +348,7 @@ function buildFrame(forecastValue, settings, platform, nowUnix) {
       snowH: barPx(hour.snowCm, 1, 0.05, laneH),
       cloudH: Math.round(hour.cloud / 100 * layout.cloud.h),
       windH: windPx(hour.windKmh, layout.wind.h),
-      windDir: dirByte(hour.windDir),
+      windDir: dirOctant(hour.windDir),
       deg: degByte(hour.tempC, unit),
       windSpeed: speedByte(hour.windKmh, unit)
     });
@@ -412,23 +413,23 @@ function buildFrame(forecastValue, settings, platform, nowUnix) {
   o = putU32(bytes, o, offset);
   o = putI16(bytes, o, currentDeg);
   o = putU8(bytes, o, dayRecs.length);
-  // The sun count stays in the header at zero; the watch places suns itself.
-  o = putU8(bytes, o, 0);
+  // Header byte 23 carries the configured refresh interval in minutes so the watch
+  // only sends a backstop refresh when the phone has actually missed its window.
+  var refreshMin = isNum(settings.refreshMin) && settings.refreshMin >= 1
+    ? Math.min(255, Math.round(settings.refreshMin)) : 60;
+  o = putU8(bytes, o, refreshMin);
   putUtf8(bytes, o, place, 15);
   o += 16;
 
   for (i = 0; i < hourRecs.length; i++) {
     var rec = hourRecs[i];
     o = putU8(bytes, o, rec.tempY);
-    o = putU8(bytes, o, rec.night);
-    o = putU8(bytes, o, rec.rainH);
-    o = putU8(bytes, o, rec.snowH);
-    o = putU8(bytes, o, rec.cloudH);
     o = putU8(bytes, o, rec.prevY);
-    o = putU8(bytes, o, rec.windH);
-    o = putU8(bytes, o, rec.windDir);
     o = putU8(bytes, o, rec.deg);
     o = putU8(bytes, o, rec.windSpeed);
+    o = putU8(bytes, o, (rec.rainH & 0x0F) | ((rec.snowH & 0x0F) << 4));
+    o = putU8(bytes, o, (rec.cloudH & 0x1F) | ((rec.night ? 1 : 0) << 5));
+    o = putU8(bytes, o, (rec.windH & 0x0F) | ((rec.windDir & 0x0F) << 4));
   }
   for (g = 0; g < dayRecs.length; g++) {
     var day = dayRecs[g];
@@ -447,25 +448,28 @@ function unpackFrame(bytes) {
   if (bytes[0] !== VERSION) return null;
   var hourCount = bytes[3];
   var dayCount = bytes[22];
-  var sunCount = bytes[23];
-  var expect = 40 + hourCount * HOUR_BYTES + dayCount * DAY_BYTES + sunCount * 4;
+  var refreshMin = bytes[23] || 60;
+  var expect = 40 + hourCount * HOUR_BYTES + dayCount * DAY_BYTES;
   if (bytes.length !== expect) return null;
 
   var hours = [];
   var o = 40;
   var i;
   for (i = 0; i < hourCount; i++) {
+    var precip = bytes[o + 4];
+    var sky = bytes[o + 5];
+    var wind = bytes[o + 6];
     hours.push({
       tempY: bytes[o],
-      night: bytes[o + 1],
-      rainH: bytes[o + 2],
-      snowH: bytes[o + 3],
-      cloudH: bytes[o + 4],
-      prevY: bytes[o + 5],
-      windH: bytes[o + 6],
-      windDir: bytes[o + 7],
-      deg: bytes[o + 8] > 127 ? bytes[o + 8] - 256 : bytes[o + 8],
-      windSpeed: bytes[o + 9]
+      prevY: bytes[o + 1],
+      deg: bytes[o + 2] > 127 ? bytes[o + 2] - 256 : bytes[o + 2],
+      windSpeed: bytes[o + 3],
+      rainH: precip & 0x0F,
+      snowH: (precip >> 4) & 0x0F,
+      cloudH: sky & 0x1F,
+      night: (sky >> 5) & 1,
+      windH: wind & 0x0F,
+      windDir: (wind >> 4) & 0x0F
     });
     o += HOUR_BYTES;
   }
@@ -482,12 +486,6 @@ function unpackFrame(bytes) {
     });
     o += DAY_BYTES;
   }
-  var suns = [];
-  var s;
-  for (s = 0; s < sunCount; s++) {
-    suns.push({x: bytes[o], y: bytes[o + 1], r: bytes[o + 2]});
-    o += 4;
-  }
 
   var unitByte = bytes[2];
   return {
@@ -503,11 +501,10 @@ function unpackFrame(bytes) {
     utcOffset: readI32(bytes, 16),
     currentDeg: readI16(bytes, 20),
     dayCount: dayCount,
-    sunCount: sunCount,
+    refreshMin: refreshMin,
     place: decodeUtf8(bytes, 24, 16),
     hours: hours,
-    days: days,
-    suns: suns
+    days: days
   };
 }
 

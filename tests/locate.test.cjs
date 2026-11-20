@@ -59,19 +59,38 @@ test('a millisecond timestamp older than the maximum age is rejected', async fun
   var storage = memory({
     'weatherline.fix': JSON.stringify({lat: 1, lon: 2, at: 1})
   });
+  var staleAge = locate.geoOptions(false).maximumAge + 60000 + 1;
   var result = await locate.resolveFix({
     storage: storage,
     nowMs: now,
     geolocate: function(high) {
       calls.push(high);
       if (!high) {
-        return Promise.resolve(position(9, 9, now - 300000 - 60000 - 1));
+        return Promise.resolve(position(9, 9, now - staleAge));
       }
       return Promise.reject(new Error('gps'));
     }
   });
   assert.deepEqual(calls, [false, true]);
   assert.deepEqual(result, {lat: 1, lon: 2});
+});
+
+test('resolveFix skips GPS indoors when a recent cached fix exists', async function() {
+  var now = 1.7e12;
+  var calls = [];
+  var storage = memory({
+    'weatherline.fix': JSON.stringify({lat: 8, lon: 9, at: now - 3600000})
+  });
+  var result = await locate.resolveFix({
+    storage: storage,
+    nowMs: now,
+    geolocate: function(high) {
+      calls.push(high);
+      return Promise.reject(new Error('no network fix'));
+    }
+  });
+  assert.deepEqual(calls, [false]);
+  assert.deepEqual(result, {lat: 8, lon: 9});
 });
 
 test('a timestamp below 1e12 is accepted and a nearby fix keeps the cached coordinates', async function() {

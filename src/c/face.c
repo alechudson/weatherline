@@ -1,20 +1,18 @@
 #include "face.h"
 #include "layout.h"
 
-#define FACE_VERSION 3
-#define FACE_HOUR_BYTES 10
+#define FACE_VERSION 4
+#define FACE_HOUR_BYTES 7
 #define FACE_DAY_BYTES 8
 #define FACE_MAX_HOURS 144
 #define FACE_MAX_DAYS 6
-#define FACE_MAX_SUNS 6
-#define FACE_MAX_BYTES (40 + FACE_MAX_HOURS * FACE_HOUR_BYTES + FACE_MAX_DAYS * FACE_DAY_BYTES + FACE_MAX_SUNS * 4)
 #define FACE_CHUNK 240
 #define FACE_LEN_KEY 1
 #define FACE_DATA_KEY 2
 // Frame chunks use keys from FACE_DATA_KEY upward. This sits clear of them.
 #define FACE_TOP_KEY 100
 #define FACE_NO_ROW 255
-#define FACE_NO_DIR 255
+#define FACE_NO_DIR 15
 #define FACE_NO_SPEED 255
 #define FACE_NO_DEG -32768
 
@@ -27,9 +25,25 @@
 
 #if defined(PBL_ROUND)
 #define FACE_PLATFORM 2
+#define TIME_CLEAR_X (LAYOUT.time.x)
+#define TIME_CLEAR_Y (LAYOUT.time.y)
+#define TIME_CLEAR_W (LAYOUT.time.w)
+#define TIME_CLEAR_H (LAYOUT.time.h + 2)
 #else
 #define FACE_PLATFORM 1
+// Leaves x < 22 untouched so the Bluetooth rune on the left edge never overlaps the time clear.
+#define TIME_CLEAR_X 22
+#define TIME_CLEAR_Y (LAYOUT.time.y - 1)
+#define TIME_CLEAR_W (200 - TIME_CLEAR_X)
+#define TIME_CLEAR_H (LAYOUT.time.h + 2)
 #endif
+
+// Chart bounding box including the 5px radius of the now ring at the left/right edges
+// and the 2px mono night bar beneath the precipitation lane.
+#define CHART_X (LAYOUT.plot.x - 5)
+#define CHART_Y (LAYOUT.cloud.y)
+#define CHART_W (LAYOUT.plot.w + 10)
+#define CHART_H (LAYOUT.precip.y + LAYOUT.precip.h + 2 - LAYOUT.cloud.y)
 
 typedef struct {
   uint8_t temp_y;
@@ -61,6 +75,7 @@ typedef struct {
   bool top_updated;
   uint8_t hour_count;
   uint8_t day_count;
+  uint8_t refresh_min;
   uint32_t fetched_at;
   uint32_t window_start;
   uint32_t window_end;
@@ -70,6 +85,21 @@ typedef struct {
   FaceHour hours[FACE_MAX_HOURS];
   FaceDay days[FACE_MAX_DAYS];
 } Face;
+
+// Where one day's labels go: its name and high along the top of the chart, its low along the
+// bottom. Precomputed when a frame arrives so paint never re-measures them.
+typedef struct {
+  char name[6];
+  char max[8];
+  char min[8];
+  GSize name_size;
+  GSize max_size;
+  GSize min_size;
+  int x;
+  int max_x;
+  bool show_max;
+  bool show_min;
+} DayLabel;
 
 typedef struct {
   GColor bg;
@@ -105,6 +135,26 @@ static bool s_show_updated;
 // The frame as stored on the watch, so a repeat of it skips the flash write.
 static uint8_t s_blob[FACE_MAX_BYTES];
 static int s_blob_len = 0;
+
+// Precomputed per-frame geometry and labels, and an 8-bit cache of the static chart.
+static int16_t s_col_mid[FACE_MAX_HOURS];
+static DayLabel s_day_labels[FACE_MAX_DAYS];
+static GBitmap *s_chart_cache;
+static bool s_chart_cache_valid;
+
+// Partial-redraw state so minute ticks only repaint regions that actually changed.
+static uint8_t s_dirty = FACE_DIRTY_ALL;
+static int s_last_now_px = -2;
+static int s_last_temp_now = FACE_NO_DEG;
+static bool s_last_temp_stale = false;
+static int s_last_hour_now = -2;
+static int s_last_steps = -2;
+static bool s_health_checked = false;
+static bool s_health_avail = false;
+static uint8_t s_last_charge_pct = 255;
+static bool s_last_charging = false;
+static int8_t s_last_bt = -1;
+static bool s_last_24h = false;
 
 static const char *WEEKDAYS[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
 
@@ -217,16 +267,18 @@ static int column_mid(int i, int n, int plot_w) {
   return column_x(i, n, plot_w) + column_w(i, n, plot_w) / 2;
 }
 
+static void prepare_frame(void);
+
 static bool unpack(Face *face, const uint8_t *data, int len) {
   memset(face, 0, sizeof(*face));
   if (!data || len < 40 || len > FACE_MAX_BYTES) return false;
   if (data[0] != FACE_VERSION || data[1] != FACE_PLATFORM) return false;
   uint8_t hour_count = data[3];
   uint8_t day_count = data[22];
-  uint8_t sun_count = data[23];
-  int expect = 40 + (int)hour_count * FACE_HOUR_BYTES + (int)day_count * FACE_DAY_BYTES + (int)sun_count * 4;
+  uint8_t refresh_min = data[23];
+  int expect = 40 + (int)hour_count * FACE_HOUR_BYTES + (int)day_count * FACE_DAY_BYTES;
   if (expect != len) return false;
-  if (hour_count > FACE_MAX_HOURS || day_count > FACE_MAX_DAYS || sun_count > FACE_MAX_SUNS) {
+  if (hour_count > FACE_MAX_HOURS || day_count > FACE_MAX_DAYS) {
     return false;
   }
 
@@ -237,6 +289,7 @@ static bool unpack(Face *face, const uint8_t *data, int len) {
   face->top_updated = (data[2] & FACE_UPDATED_FLAG) != 0;
   face->hour_count = hour_count;
   face->day_count = day_count;
+  face->refresh_min = refresh_min ? refresh_min : 60;
   face->fetched_at = read_u32(data + 4);
   face->window_start = read_u32(data + 8);
   face->window_end = read_u32(data + 12);
@@ -248,16 +301,19 @@ static bool unpack(Face *face, const uint8_t *data, int len) {
   const uint8_t *p = data + 40;
   int i;
   for (i = 0; i < hour_count; i++) {
+    uint8_t precip = p[4];
+    uint8_t sky = p[5];
+    uint8_t wind = p[6];
     face->hours[i].temp_y = p[0];
-    face->hours[i].night = p[1];
-    face->hours[i].rain_h = p[2];
-    face->hours[i].snow_h = p[3];
-    face->hours[i].cloud_h = p[4];
-    face->hours[i].prev_y = p[5];
-    face->hours[i].wind_h = p[6];
-    face->hours[i].wind_dir = p[7];
-    face->hours[i].deg = (int8_t)p[8];
-    face->hours[i].wind_speed = p[9];
+    face->hours[i].prev_y = p[1];
+    face->hours[i].deg = (int8_t)p[2];
+    face->hours[i].wind_speed = p[3];
+    face->hours[i].rain_h = precip & 0x0F;
+    face->hours[i].snow_h = (precip >> 4) & 0x0F;
+    face->hours[i].cloud_h = sky & 0x1F;
+    face->hours[i].night = (sky >> 5) & 1;
+    face->hours[i].wind_h = wind & 0x0F;
+    face->hours[i].wind_dir = (wind >> 4) & 0x0F;
     p += FACE_HOUR_BYTES;
   }
   for (i = 0; i < day_count; i++) {
@@ -269,7 +325,6 @@ static bool unpack(Face *face, const uint8_t *data, int len) {
     face->days[i].mday = p[7];
     p += FACE_DAY_BYTES;
   }
-  // Sun records follow; this design draws the sky strip instead, so they are skipped.
   return true;
 }
 
@@ -289,30 +344,45 @@ static void save_bytes(const uint8_t *data, int len) {
 }
 
 // Writes the choice only when it changes. The default (wind, nothing stored) stays unwritten
-// so an upgrade does not touch the flash.
-static void apply_top(bool updated) {
+// so an upgrade does not touch the flash. Returns true if the visible choice changed.
+static bool apply_top(bool updated) {
+  bool changed = s_show_updated != updated;
   bool known = persist_exists(FACE_TOP_KEY);
   if ((!known && !updated) || (known && persist_read_bool(FACE_TOP_KEY) == updated)) {
     s_show_updated = updated;
-    return;
+    return changed;
   }
   s_show_updated = updated;
   persist_write_bool(FACE_TOP_KEY, updated);
+  return changed;
 }
 
-bool face_set_frame(const uint8_t *data, int len) {
-  if (!unpack(&s_scratch, data, len)) return false;
+bool face_has_frame(void) {
+  return s_face.ok;
+}
+
+uint8_t face_set_frame(const uint8_t *data, int len) {
+  if (s_face.ok && len == s_blob_len && memcmp(data, s_blob, (size_t)len) == 0) return 0;
+  if (!unpack(&s_scratch, data, len)) return 0;
+  bool full = !s_face.ok || s_scratch.light != s_face.light || s_scratch.mono != s_face.mono;
+  bool top_changed = apply_top(s_scratch.top_updated);
+  bool meta_changed = full || strncmp(s_face.place, s_scratch.place, sizeof(s_face.place)) != 0;
+  bool top_center_changed = top_changed || !s_show_updated || s_scratch.fetched_at != s_face.fetched_at;
   s_face = s_scratch;
-  apply_top(s_face.top_updated);
-  if (len == s_blob_len && memcmp(data, s_blob, (size_t)len) == 0) return true;
+  prepare_frame();
+  s_chart_cache_valid = false;
   save_bytes(data, len);
   memcpy(s_blob, data, (size_t)len);
   s_blob_len = len;
-  return true;
+  if (full) return FACE_DIRTY_ALL;
+  uint8_t mask = FACE_DIRTY_CHART;
+  if (meta_changed) mask |= FACE_DIRTY_META;
+  if (top_center_changed) mask |= FACE_DIRTY_TOP_CENTER;
+  return mask;
 }
 
-void face_set_top_line(bool updated) {
-  apply_top(updated);
+bool face_set_top_line(bool updated) {
+  return apply_top(updated);
 }
 
 void face_load(void) {
@@ -335,6 +405,8 @@ void face_load(void) {
   s_blob_len = len;
   // A choice saved on its own, before any forecast, wins over a frame that predates it.
   if (!persist_exists(FACE_TOP_KEY)) s_show_updated = s_face.top_updated;
+  prepare_frame();
+  s_chart_cache_valid = false;
 }
 
 static void fill_rect(GContext *ctx, int x, int y, int w, int h, GColor color) {
@@ -404,6 +476,33 @@ static void draw_fitted(GContext *ctx, const char *text, GFont font, GRect box,
 // from `x` in direction `dir` toward the solid band.
 static void draw_night_fade(GContext *ctx, const Theme *t, int x, int top, int bottom, int cols,
                             int dir) {
+  if (cols <= 0) return;
+  GBitmap *fb = graphics_capture_frame_buffer(ctx);
+  if (fb) {
+    GRect fb_bounds = gbitmap_get_bounds(fb);
+    uint8_t color = t->sky_night.argb;
+    int y;
+    for (y = top; y < bottom; y++) {
+      if (y < fb_bounds.origin.y || y >= fb_bounds.origin.y + fb_bounds.size.h) continue;
+      GBitmapDataRowInfo info = gbitmap_get_data_row_info(fb, y);
+      int k;
+      for (k = 0; k < cols; k++) {
+        int cx = x + dir * k;
+        if (cx < info.min_x || cx > info.max_x) continue;
+        bool on;
+        if (k == 0) {
+          on = ((cx | y) & 1) == 0;
+        } else if (k == 1) {
+          on = ((cx + y) & 1) == 0;
+        } else {
+          on = ((cx & y) & 1) == 0;
+        }
+        if (on) info.data[cx] = color;
+      }
+    }
+    graphics_release_frame_buffer(ctx, fb);
+    return;
+  }
   int k;
   graphics_context_set_stroke_color(ctx, t->sky_night);
   for (k = 0; k < cols; k++) {
@@ -455,29 +554,26 @@ static void draw_night(GContext *ctx, const Theme *t) {
   }
 }
 
-// Value of an hourly field at pixel column px, interpolated between hour centers.
-static int field_at(int px, const uint8_t *base, int stride) {
+// Advances `*idx` monotonically as px walks left to right, giving O(w + n) interpolation.
+static int field_at_step(int px, int *idx, const uint8_t *base, int stride) {
   int n = s_face.hour_count;
-  int w = LAYOUT.plot.w;
-  int i = 0;
-  while (i < n - 1 && px >= column_mid(i + 1, n, w)) i += 1;
+  int i = *idx;
+  while (i < n - 1 && px >= s_col_mid[i + 1]) i += 1;
+  *idx = i;
   int a = base[i * stride];
-  int mid = column_mid(i, n, w);
+  int mid = s_col_mid[i];
   if (i >= n - 1 || px <= mid) return a;
   int b = base[(i + 1) * stride];
-  int next = column_mid(i + 1, n, w);
+  int next = s_col_mid[i + 1];
   if (next <= mid) return a;
   return a + ((b - a) * (px - mid)) / (next - mid);
-}
-
-static int cloud_at(int px) {
-  return field_at(px, &s_face.hours[0].cloud_h, sizeof(FaceHour));
 }
 
 // Clouds are a bank of puffs sitting on the lane floor. Each puff grows with the cover
 // under it, so thin cloud is a low ripple and overcast fills the lane. A one-pixel rim on
 // top of each puff gives the bank some shape.
 static void draw_clouds(GContext *ctx, const Theme *t) {
+  if (s_face.hour_count == 0) return;
   int w = LAYOUT.plot.w;
   int lane = LAYOUT.cloud.h;
   int floor_y = LAYOUT.cloud.y + lane;
@@ -490,9 +586,10 @@ static void draw_clouds(GContext *ctx, const Theme *t) {
   for (pass = 0; pass < 2; pass++) {
     int px;
     int k = 0;
+    int idx = 0;
     graphics_context_set_fill_color(ctx, pass == 0 ? t->cloud_rim : t->sky_cloud);
     for (px = 0; px < w; px += step, k++) {
-      int c = cloud_at(px);
+      int c = field_at_step(px, &idx, &s_face.hours[0].cloud_h, sizeof(FaceHour));
       int r = (c * max_r + lane / 2) / lane;
       if (r >= 3) r += BILLOW[k % (int)ARRAY_LENGTH(BILLOW)];
       if (r < 2) continue;
@@ -521,36 +618,106 @@ static void draw_sky(GContext *ctx, const Theme *t) {
   draw_clouds(ctx, t);
 }
 
-// Row of the line at pixel column px, interpolated between hour centers.
-static int row_at(int px, bool prev, bool *known) {
+// Row of the line at pixel column px, advancing `*idx` monotonically.
+static int row_at_step(int px, int *idx, bool prev, bool *known) {
   int n = s_face.hour_count;
-  int w = LAYOUT.plot.w;
-  int i = 0;
-  while (i < n - 1 && px >= column_mid(i + 1, n, w)) i += 1;
+  int i = *idx;
+  while (i < n - 1 && px >= s_col_mid[i + 1]) i += 1;
+  *idx = i;
   int a = prev ? s_face.hours[i].prev_y : s_face.hours[i].temp_y;
   if (prev && a == FACE_NO_ROW) {
     *known = false;
     return 0;
   }
   *known = true;
-  int mid = column_mid(i, n, w);
+  int mid = s_col_mid[i];
   if (i >= n - 1 || px <= mid) return a;
   int b = prev ? s_face.hours[i + 1].prev_y : s_face.hours[i + 1].temp_y;
   if (prev && b == FACE_NO_ROW) return a;
-  int next = column_mid(i + 1, n, w);
+  int next = s_col_mid[i + 1];
   if (next <= mid) return a;
   return a + ((b - a) * (px - mid)) / (next - mid);
 }
 
+static int row_at(int px, bool prev, bool *known) {
+  int idx = 0;
+  return row_at_step(px, &idx, prev, known);
+}
+
 // Shade between today and yesterday at the same hour: warm where today is warmer, cool where colder.
 static void draw_fronts(GContext *ctx, const Theme *t) {
+  if (s_face.hour_count == 0) return;
   int px;
+  int idx = 0;
+  GBitmap *fb = graphics_capture_frame_buffer(ctx);
+  if (fb) {
+    GRect fb_bounds = gbitmap_get_bounds(fb);
+    GBitmapDataRowInfo rows[80];
+    int plot_h = LAYOUT.plot.h;
+    if (plot_h > (int)ARRAY_LENGTH(rows)) plot_h = (int)ARRAY_LENGTH(rows);
+    int ry;
+    for (ry = 0; ry < plot_h; ry++) {
+      int sy = LAYOUT.plot.y + ry;
+      if (sy >= fb_bounds.origin.y && sy < fb_bounds.origin.y + fb_bounds.size.h) {
+        rows[ry] = gbitmap_get_data_row_info(fb, sy);
+      } else {
+        rows[ry].data = NULL;
+        rows[ry].min_x = 1;
+        rows[ry].max_x = 0;
+      }
+    }
+    for (px = 0; px < LAYOUT.plot.w; px++) {
+      bool known_now;
+      bool known_prev;
+      int now_y = row_at_step(px, &idx, false, &known_now);
+      int prev_y = row_at_step(px, &idx, true, &known_prev);
+      if (!known_prev) continue;
+      int x = LAYOUT.plot.x + px;
+      int y0;
+      int y1;
+      bool striped = false;
+      uint8_t color;
+      if (prev_y > now_y + 1) {
+        color = t->warmer.argb;
+        y0 = now_y;
+        y1 = prev_y;
+      } else if (now_y > prev_y + 1) {
+        color = t->colder.argb;
+        y0 = prev_y;
+        y1 = now_y;
+        striped = t->striped_colder;
+      } else {
+        continue;
+      }
+      if (y0 < -1) y0 = -1;
+      if (y1 > plot_h) y1 = plot_h;
+      int y;
+      if (striped) {
+        for (y = y0 + 1; y < y1; y++) {
+          int sy = LAYOUT.plot.y + y;
+          if ((sy & 1) == 0 && rows[y].data && x >= rows[y].min_x && x <= rows[y].max_x) {
+            rows[y].data[x] = color;
+          }
+        }
+      } else {
+        for (y = y0 + 1; y < y1; y++) {
+          int sy = LAYOUT.plot.y + y;
+          if ((x & sy & 1) == 0 && rows[y].data && x >= rows[y].min_x && x <= rows[y].max_x) {
+            rows[y].data[x] = color;
+          }
+        }
+      }
+    }
+    graphics_release_frame_buffer(ctx, fb);
+    return;
+  }
+
   graphics_context_set_antialiased(ctx, false);
   for (px = 0; px < LAYOUT.plot.w; px++) {
     bool known_now;
     bool known_prev;
-    int now_y = row_at(px, false, &known_now);
-    int prev_y = row_at(px, true, &known_prev);
+    int now_y = row_at_step(px, &idx, false, &known_now);
+    int prev_y = row_at_step(px, &idx, true, &known_prev);
     if (!known_prev) continue;
     int x = LAYOUT.plot.x + px;
     int y0;
@@ -609,15 +776,14 @@ static void set_thermal_stroke(GContext *ctx, const Theme *t, int deg) {
 
 static void draw_line(GContext *ctx, const Theme *t) {
   int n = s_face.hour_count;
-  int w = LAYOUT.plot.w;
   int i;
   if (n < 2) return;
   graphics_context_set_antialiased(ctx, true);
   for (i = 0; i < n - 1; i++) {
     set_thermal_stroke(ctx, t, (s_face.hours[i].deg + s_face.hours[i + 1].deg) / 2);
     graphics_draw_line(ctx,
-                       GPoint(LAYOUT.plot.x + column_mid(i, n, w), LAYOUT.plot.y + s_face.hours[i].temp_y),
-                       GPoint(LAYOUT.plot.x + column_mid(i + 1, n, w), LAYOUT.plot.y + s_face.hours[i + 1].temp_y));
+                       GPoint(LAYOUT.plot.x + s_col_mid[i], LAYOUT.plot.y + s_face.hours[i].temp_y),
+                       GPoint(LAYOUT.plot.x + s_col_mid[i + 1], LAYOUT.plot.y + s_face.hours[i + 1].temp_y));
   }
   graphics_context_set_stroke_width(ctx, 1);
 }
@@ -659,21 +825,6 @@ static int now_px(time_t now) {
   return (int)(((now64 - (int64_t)s_face.window_start) * LAYOUT.plot.w) / span);
 }
 
-// Where one day's labels go: its name and high along the top of the chart, its low along the
-// bottom. The temperature tag reads the same boxes so it never lands on a label.
-typedef struct {
-  char name[6];
-  char max[8];
-  char min[8];
-  GSize name_size;
-  GSize max_size;
-  GSize min_size;
-  int x;
-  int max_x;
-  bool show_max;
-  bool show_min;
-} DayLabel;
-
 static void layout_day_label(int i, DayLabel *out) {
   GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_14);
   GFont bold = fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD);
@@ -698,6 +849,18 @@ static void layout_day_label(int i, DayLabel *out) {
   out->show_min = out->min_size.w > 0 && out->min_size.w <= span;
 }
 
+static void prepare_frame(void) {
+  int n = s_face.hour_count;
+  int w = LAYOUT.plot.w;
+  int i;
+  for (i = 0; i < n; i++) {
+    s_col_mid[i] = (int16_t)column_mid(i, n, w);
+  }
+  for (i = 0; i < s_face.day_count; i++) {
+    layout_day_label(i, &s_day_labels[i]);
+  }
+}
+
 #define LABEL_TOP_Y (LAYOUT.plot.y - 3)
 
 static int label_bottom_y(const DayLabel *label) {
@@ -709,16 +872,15 @@ static int label_bottom_y(const DayLabel *label) {
 static bool hits_day_label(GRect r) {
   int i;
   for (i = 0; i < s_face.day_count; i++) {
-    DayLabel label;
-    layout_day_label(i, &label);
-    int top_x1 = label.show_max ? label.max_x + label.max_size.w : label.x + label.name_size.w;
-    if (top_x1 > label.x && r.origin.x < top_x1 + 1 && r.origin.x + r.size.w > label.x - 1 &&
+    const DayLabel *label = &s_day_labels[i];
+    int top_x1 = label->show_max ? label->max_x + label->max_size.w : label->x + label->name_size.w;
+    if (top_x1 > label->x && r.origin.x < top_x1 + 1 && r.origin.x + r.size.w > label->x - 1 &&
         r.origin.y < LABEL_TOP_Y + 15 && r.origin.y + r.size.h > LABEL_TOP_Y + 3) {
       return true;
     }
-    int by = label_bottom_y(&label);
-    if (label.show_min && r.origin.x < label.x + label.min_size.w + 1 &&
-        r.origin.x + r.size.w > label.x - 1 && r.origin.y < by + 15 && r.origin.y + r.size.h > by + 3) {
+    int by = label_bottom_y(label);
+    if (label->show_min && r.origin.x < label->x + label->min_size.w + 1 &&
+        r.origin.x + r.size.w > label->x - 1 && r.origin.y < by + 15 && r.origin.y + r.size.h > by + 3) {
       return true;
     }
   }
@@ -731,16 +893,15 @@ static void draw_day_labels(GContext *ctx, const Theme *t) {
   GFont bold = fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD);
   int i;
   for (i = 0; i < s_face.day_count; i++) {
-    DayLabel label;
-    layout_day_label(i, &label);
-    if (label.name_size.w > 0) {
-      draw_halo_text(ctx, t, label.name, font, label.x, LABEL_TOP_Y, label.name_size, t->muted);
+    const DayLabel *label = &s_day_labels[i];
+    if (label->name_size.w > 0) {
+      draw_halo_text(ctx, t, label->name, font, label->x, LABEL_TOP_Y, label->name_size, t->muted);
     }
-    if (label.show_max) {
-      draw_halo_text(ctx, t, label.max, bold, label.max_x, LABEL_TOP_Y, label.max_size, t->text);
+    if (label->show_max) {
+      draw_halo_text(ctx, t, label->max, bold, label->max_x, LABEL_TOP_Y, label->max_size, t->text);
     }
-    if (label.show_min) {
-      draw_halo_text(ctx, t, label.min, bold, label.x, label_bottom_y(&label), label.min_size,
+    if (label->show_min) {
+      draw_halo_text(ctx, t, label->min, bold, label->x, label_bottom_y(label), label->min_size,
                      t->text);
     }
   }
@@ -824,7 +985,7 @@ static void draw_hour_labels(GContext *ctx, const Theme *t) {
       snprintf(text, sizeof(text), "%d%s", hour == 12 ? 12 : hour % 12, hour < 12 ? "a" : "p");
     }
     GSize size = text_size(text, font);
-    int x = LAYOUT.plot.x + column_mid(i, n, LAYOUT.plot.w) - size.w / 2;
+    int x = LAYOUT.plot.x + s_col_mid[i] - size.w / 2;
     draw_halo_text(ctx, t, text, font, x, LAYOUT.plot.y + LAYOUT.plot.h - size.h, size, t->muted);
   }
 }
@@ -897,8 +1058,8 @@ static void barb_line(Barb *b, int x0, int y0, int x1, int y1) {
   }
 }
 
-// Builds a barb around the origin.
-static void build_barb(Barb *b, int from_deg, int knots) {
+// Builds a barb around the origin for compass octant 0..7 (N, NE, E, SE, S, SW, W, NW).
+static void build_barb(Barb *b, int oct, int knots) {
   b->count = 0;
   int k5 = ((knots + 2) / 5) * 5;
   if (k5 < 5) {
@@ -911,7 +1072,7 @@ static void build_barb(Barb *b, int from_deg, int knots) {
     return;
   }
   if (k5 > 95) k5 = 95;
-  int oct = ((((from_deg % 360) + 360) % 360) + 22) / 45 % 8;
+  oct &= 7;
   const int8_t *sv = DIR8[oct];
   // Feathers sit on the left of the staff as seen looking downwind and slant toward its tip,
   // about 63 degrees off a straight staff and 72 off a diagonal one, near the 70 used on
@@ -949,9 +1110,9 @@ static void build_barb(Barb *b, int from_deg, int knots) {
 }
 
 // Draws a barb with its bounding box centered on (cx, cy).
-static void draw_barb(GContext *ctx, int cx, int cy, int from_deg, int knots, GColor color) {
+static void draw_barb(GContext *ctx, int cx, int cy, int oct, int knots, GColor color) {
   Barb b;
-  build_barb(&b, from_deg, knots);
+  build_barb(&b, oct, knots);
   if (b.count == 0) return;
   int minx = b.px[0].x, maxx = b.px[0].x, miny = b.px[0].y, maxy = b.px[0].y;
   int k;
@@ -978,16 +1139,18 @@ static int hour_knots(const FaceHour *hour) {
 // direction and speed.
 static void draw_wind(GContext *ctx, const Theme *t) {
   int n = s_face.hour_count;
+  if (n == 0) return;
   int w = LAYOUT.plot.w;
   int top = LAYOUT.wind.y;
   int floor_y = LAYOUT.wind.y + LAYOUT.wind.h;
   int px;
+  int idx = 0;
   graphics_context_set_antialiased(ctx, false);
   graphics_context_set_stroke_width(ctx, 1);
   // A plain area with no edge line, so nothing crosses the barbs drawn over it.
   graphics_context_set_stroke_color(ctx, t->wind);
   for (px = 0; px < w; px++) {
-    int h = field_at(px, &s_face.hours[0].wind_h, sizeof(FaceHour));
+    int h = field_at_step(px, &idx, &s_face.hours[0].wind_h, sizeof(FaceHour));
     if (h <= 0) continue;
     if (h > LAYOUT.wind.h) h = LAYOUT.wind.h;
     int x = LAYOUT.plot.x + px;
@@ -1003,7 +1166,7 @@ static void draw_wind(GContext *ctx, const Theme *t) {
     FaceHour hour = s_face.hours[i];
     int knots = hour_knots(&hour);
     if (hour.wind_dir == FACE_NO_DIR || knots < 0) continue;
-    draw_barb(ctx, LAYOUT.plot.x + column_mid(i, n, w), cy, hour.wind_dir * 2, knots, t->wind_barb);
+    draw_barb(ctx, LAYOUT.plot.x + s_col_mid[i], cy, hour.wind_dir, knots, t->wind_barb);
   }
 }
 
@@ -1033,7 +1196,7 @@ static void draw_precip(GContext *ctx, const Theme *t) {
   }
 }
 
-static void draw_chart(GContext *ctx, const Theme *t, time_t now) {
+static void draw_static_chart(GContext *ctx, const Theme *t) {
   draw_night(ctx, t);
   draw_sky(ctx, t);
   draw_fronts(ctx, t);
@@ -1042,6 +1205,53 @@ static void draw_chart(GContext *ctx, const Theme *t, time_t now) {
   draw_precip(ctx, t);
   draw_day_labels(ctx, t);
   draw_hour_labels(ctx, t);
+}
+
+static void capture_chart_cache(GContext *ctx, const Theme *t) {
+  if (!s_chart_cache) return;
+  GBitmap *fb = graphics_capture_frame_buffer(ctx);
+  if (!fb) return;
+  GRect fb_bounds = gbitmap_get_bounds(fb);
+  uint8_t *dst = gbitmap_get_data(s_chart_cache);
+  uint16_t dst_stride = gbitmap_get_bytes_per_row(s_chart_cache);
+  int row;
+  for (row = 0; row < CHART_H; row++) {
+    uint8_t *dst_row = dst + row * dst_stride;
+    int sy = CHART_Y + row;
+    if (sy < fb_bounds.origin.y || sy >= fb_bounds.origin.y + fb_bounds.size.h) {
+      memset(dst_row, t->bg.argb, (size_t)CHART_W);
+      continue;
+    }
+    GBitmapDataRowInfo info = gbitmap_get_data_row_info(fb, sy);
+    int x0 = CHART_X;
+    int x1 = CHART_X + CHART_W - 1;
+    if (x0 < info.min_x) {
+      memset(dst_row, t->bg.argb, (size_t)(info.min_x - x0));
+      x0 = info.min_x;
+    }
+    if (x1 > info.max_x) {
+      if (info.max_x + 1 < CHART_X + CHART_W) {
+        memset(dst_row + (info.max_x + 1 - CHART_X), t->bg.argb,
+               (size_t)(CHART_X + CHART_W - (info.max_x + 1)));
+      }
+      x1 = info.max_x;
+    }
+    if (x1 >= x0) {
+      memcpy(dst_row + (x0 - CHART_X), info.data + x0, (size_t)(x1 - x0 + 1));
+    }
+  }
+  graphics_release_frame_buffer(ctx, fb);
+  s_chart_cache_valid = true;
+}
+
+static void draw_chart(GContext *ctx, const Theme *t, time_t now, bool cleared) {
+  if (s_chart_cache && s_chart_cache_valid) {
+    graphics_draw_bitmap_in_rect(ctx, s_chart_cache, GRect(CHART_X, CHART_Y, CHART_W, CHART_H));
+  } else {
+    if (!cleared) fill_rect(ctx, CHART_X, CHART_Y, CHART_W, CHART_H, t->bg);
+    draw_static_chart(ctx, t);
+    capture_chart_cache(ctx, t);
+  }
   draw_now(ctx, t, now);
 }
 
@@ -1069,9 +1279,15 @@ void face_init(void) {
 #else
   s_time_font = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_TIME_72));
 #endif
+  s_chart_cache = gbitmap_create_blank(GSize(CHART_W, CHART_H), GBitmapFormat8Bit);
+  s_chart_cache_valid = false;
+  s_last_24h = clock_is_24h_style();
 }
 
 void face_deinit(void) {
+  if (s_chart_cache) gbitmap_destroy(s_chart_cache);
+  s_chart_cache = NULL;
+  s_chart_cache_valid = false;
   if (s_time_font) fonts_unload_custom_font(s_time_font);
   s_time_font = NULL;
 }
@@ -1231,7 +1447,7 @@ static void draw_wind_now(GContext *ctx, const Theme *t, time_t now) {
   }
   int x = LAYOUT.windnow.x + (LAYOUT.windnow.w - arrow_w - size.w) / 2;
   if (arrow) {
-    draw_barb(ctx, x + 5, LAYOUT.windnow.y + LAYOUT.windnow.h / 2 + 1, hour.wind_dir * 2,
+    draw_barb(ctx, x + 5, LAYOUT.windnow.y + LAYOUT.windnow.h / 2 + 1, hour.wind_dir,
               hour_knots(&hour), t->muted);
   }
   draw_text(ctx, text, font,
@@ -1239,18 +1455,27 @@ static void draw_wind_now(GContext *ctx, const Theme *t, time_t now) {
             GTextAlignmentLeft, t->muted);
 }
 
-static void draw_steps(GContext *ctx, const Theme *t) {
-  time_t start = time_start_of_today();
-  time_t end = time(NULL);
-  if (end <= start) end = start + 1;
-  HealthServiceAccessibilityMask mask =
-      health_service_metric_accessible(HealthMetricStepCount, start, end);
-  if ((mask & HealthServiceAccessibilityMaskAvailable) == 0) return;
+static int read_steps(time_t now) {
+  if (!s_health_checked) {
+    time_t start = time_start_of_today();
+    time_t end = now;
+    if (end <= start) end = start + 1;
+    HealthServiceAccessibilityMask mask =
+        health_service_metric_accessible(HealthMetricStepCount, start, end);
+    s_health_avail = (mask & HealthServiceAccessibilityMaskAvailable) != 0;
+    s_health_checked = true;
+  }
+  if (!s_health_avail) return -1;
   HealthValue steps = health_service_sum_today(HealthMetricStepCount);
-  if (steps < 0) return;
+  return steps >= 0 ? (int)steps : -1;
+}
+
+static void draw_steps(GContext *ctx, const Theme *t, time_t now) {
+  if (s_last_steps == -2) s_last_steps = read_steps(now);
+  if (s_last_steps < 0) return;
   char number[16];
   char text[24];
-  format_grouped(number, (int)steps);
+  format_grouped(number, s_last_steps);
   GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_14);
   // Say what the number is when there is room for it.
   snprintf(text, sizeof(text), "%s steps", number);
@@ -1265,6 +1490,8 @@ static void draw_steps(GContext *ctx, const Theme *t) {
 
 static void draw_battery(GContext *ctx, const Theme *t) {
   BatteryChargeState charge = battery_state_service_peek();
+  s_last_charge_pct = charge.charge_percent;
+  s_last_charging = charge.is_charging;
   bool low = charge.charge_percent <= 20 && !charge.is_charging;
   GColor color = low ? GColorRed : t->muted;
   GColor level = charge.is_charging ? GColorIslamicGreen : (low ? GColorRed : t->text);
@@ -1291,7 +1518,9 @@ static void draw_battery(GContext *ctx, const Theme *t) {
 
 // Nothing shows while the phone is connected; a red Bluetooth rune shows when it is not.
 static void draw_bluetooth(GContext *ctx) {
-  if (bluetooth_connection_service_peek()) return;
+  bool connected = bluetooth_connection_service_peek();
+  s_last_bt = connected ? 1 : 0;
+  if (connected) return;
   int x = LAYOUT.bt_x;
   int y = LAYOUT.bt_y;
   int h = LAYOUT.bt_r + 2;
@@ -1305,22 +1534,122 @@ static void draw_bluetooth(GContext *ctx) {
   graphics_draw_line(ctx, GPoint(x + h / 2 + 1, y + h / 2), GPoint(x - h / 2 - 1, y - h / 2));
 }
 
+bool face_needs_refresh(time_t now, uint32_t grace_sec) {
+  if (!s_face.ok) return true;
+  // Skip overnight Bluetooth wakeups during Quiet Time while the cached forecast covers now.
+  if (quiet_time_is_active() && hour_now(now) >= 0) return false;
+  int64_t interval =
+      (int64_t)(s_face.refresh_min ? s_face.refresh_min : 60) * 60 + (int64_t)grace_sec;
+  int64_t age = (int64_t)now - (int64_t)s_face.fetched_at;
+  return age < -600 || age >= interval;
+}
+
+uint8_t face_tick_dirty(time_t now, TimeUnits units_changed) {
+  uint8_t mask = FACE_DIRTY_TIME;
+  bool h24 = clock_is_24h_style();
+  if (h24 != s_last_24h) {
+    s_chart_cache_valid = false;
+    return FACE_DIRTY_ALL;
+  }
+  if (units_changed & DAY_UNIT) {
+    s_health_checked = false;
+    mask |= FACE_DIRTY_META;
+  }
+  if (s_face.ok) {
+    int px = now_px(now);
+    bool stale = false;
+    int deg = temp_now(now, &stale);
+    if (px != s_last_now_px || deg != s_last_temp_now || stale != s_last_temp_stale) {
+      mask |= FACE_DIRTY_CHART;
+      if ((px < 0) != (s_last_now_px < 0)) mask |= FACE_DIRTY_META;
+    }
+    if (!s_show_updated && hour_now(now) != s_last_hour_now) {
+      mask |= FACE_DIRTY_TOP_CENTER;
+    }
+  }
+  int steps = read_steps(now);
+  if (steps != s_last_steps) {
+    s_last_steps = steps;
+    mask |= FACE_DIRTY_STEPS;
+  }
+  return mask;
+}
+
+bool face_battery_changed(BatteryChargeState charge) {
+  return charge.charge_percent != s_last_charge_pct || charge.is_charging != s_last_charging;
+}
+
+bool face_bluetooth_changed(bool connected) {
+  return s_last_bt != (connected ? 1 : 0);
+}
+
+void face_invalidate_all(void) {
+  s_health_checked = false;
+  s_last_steps = -2;
+  if (clock_is_24h_style() != s_last_24h) s_chart_cache_valid = false;
+}
+
+void face_mark_dirty(uint8_t mask) {
+  s_dirty |= mask;
+}
+
 void face_paint(Layer *layer, GContext *ctx) {
   Theme t = theme();
   GRect bounds = layer_get_bounds(layer);
-  fill_rect(ctx, bounds.origin.x, bounds.origin.y, bounds.size.w, bounds.size.h, t.bg);
+  uint8_t dirty = s_dirty;
+  s_dirty = 0;
+  // If PebbleOS triggered a repaint directly (e.g. after a modal or screenshot), repaint all.
+  bool full = (dirty == 0 || dirty == FACE_DIRTY_ALL);
+  if (full) {
+    dirty = FACE_DIRTY_ALL;
+    fill_rect(ctx, bounds.origin.x, bounds.origin.y, bounds.size.w, bounds.size.h, t.bg);
+  }
   time_t now = time(NULL);
   struct tm local = *localtime(&now);
-  if (s_face.ok) {
-    draw_chart(ctx, &t, now);
-  } else {
-    draw_waiting(ctx, &t);
+  if (dirty & FACE_DIRTY_CHART) {
+    if (s_face.ok) {
+      draw_chart(ctx, &t, now, full);
+    } else {
+      if (!full) fill_rect(ctx, CHART_X, CHART_Y, CHART_W, CHART_H, t.bg);
+      draw_waiting(ctx, &t);
+    }
+    s_last_now_px = now_px(now);
+    s_last_temp_now = temp_now(now, &s_last_temp_stale);
   }
-  draw_time(ctx, &t, &local);
-  draw_meta(ctx, &t, &local, now);
-  draw_steps(ctx, &t);
-  draw_battery(ctx, &t);
-  if (s_show_updated) draw_updated(ctx, &t);
-  else draw_wind_now(ctx, &t, now);
-  draw_bluetooth(ctx);
+  if (dirty & FACE_DIRTY_TIME) {
+    if (!full) fill_rect(ctx, TIME_CLEAR_X, TIME_CLEAR_Y, TIME_CLEAR_W, TIME_CLEAR_H, t.bg);
+    draw_time(ctx, &t, &local);
+  }
+  if (dirty & FACE_DIRTY_META) {
+    if (!full) fill_rect(ctx, LAYOUT.meta.x, LAYOUT.meta.y, LAYOUT.meta.w, LAYOUT.meta.h, t.bg);
+    draw_meta(ctx, &t, &local, now);
+  }
+  if (dirty & FACE_DIRTY_STEPS) {
+    if (!full) {
+      fill_rect(ctx, LAYOUT.steps.x, LAYOUT.steps.y - 1, LAYOUT.steps.w, LAYOUT.steps.h + 2, t.bg);
+    }
+    draw_steps(ctx, &t, now);
+  }
+  if (dirty & FACE_DIRTY_BATTERY) {
+    if (!full) {
+      fill_rect(ctx, LAYOUT.battery.x, LAYOUT.battery.y - 1, LAYOUT.battery.w, LAYOUT.battery.h + 2,
+                t.bg);
+    }
+    draw_battery(ctx, &t);
+  }
+  if (dirty & FACE_DIRTY_TOP_CENTER) {
+    if (!full) {
+      fill_rect(ctx, LAYOUT.windnow.x, LAYOUT.windnow.y - 1, LAYOUT.windnow.w, LAYOUT.windnow.h + 2,
+                t.bg);
+    }
+    if (s_show_updated) draw_updated(ctx, &t);
+    else draw_wind_now(ctx, &t, now);
+    s_last_hour_now = hour_now(now);
+  }
+  if (dirty & FACE_DIRTY_BT) {
+    int h = LAYOUT.bt_r + 2;
+    if (!full) fill_rect(ctx, LAYOUT.bt_x - h, LAYOUT.bt_y - h, 2 * h + 1, 2 * h + 1, t.bg);
+    draw_bluetooth(ctx);
+  }
+  s_last_24h = clock_is_24h_style();
 }

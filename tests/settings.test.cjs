@@ -72,3 +72,13 @@ test('top line is wind or updated, and anything else falls back to wind', functi
   var odd = settings.applyConfig(storage, encodeURIComponent(JSON.stringify({topLine: 'clock'})));
   assert.equal(odd.topLine, 'wind');
 });
+
+test('refresh interval accepts 30, 45, 60, 120, or 180 minutes and defaults to 60', function() {
+  var storage = memory();
+  [30, 45, 60, 120, 180].forEach(function(mins) {
+    var stored = settings.applyConfig(storage, encodeURIComponent(JSON.stringify({refreshMin: mins})));
+    assert.equal(stored.refreshMin, mins);
+  });
+  var odd = settings.applyConfig(storage, encodeURIComponent(JSON.stringify({refreshMin: 90})));
+  assert.equal(odd.refreshMin, 60);
+});

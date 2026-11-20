@@ -10,7 +10,8 @@ function normalize(raw) {
   if (raw.days === 1 || raw.days === 2 || raw.days === 3 || raw.days === 5) out.days = raw.days;
   if (raw.unit === 'F' || raw.unit === 'C') out.unit = raw.unit;
   if (raw.theme === 'dark' || raw.theme === 'light' || raw.theme === 'mono') out.theme = raw.theme;
-  if (raw.refreshMin === 30 || raw.refreshMin === 45 || raw.refreshMin === 60) {
+  if (raw.refreshMin === 30 || raw.refreshMin === 45 || raw.refreshMin === 60
+      || raw.refreshMin === 120 || raw.refreshMin === 180) {
     out.refreshMin = raw.refreshMin;
   }
   // Wind is the default, so a stored settings blob from before this choice stays on wind.
@@ -89,10 +90,12 @@ function configPage(settings) {
       {value: 'F', label: '\u00b0F'},
       {value: 'C', label: '\u00b0C'}
     ], s.unit)
-    + group('Refresh every', 'A shorter interval uses a little more phone battery.', 'refreshMin', [
-      {value: 30, label: '30 min'},
-      {value: 45, label: '45 min'},
-      {value: 60, label: '1 hour'}
+    + group('Refresh every', 'A longer interval saves watch and phone battery; the watch follows the forecast between updates.', 'refreshMin', [
+      {value: 30, label: '30m'},
+      {value: 45, label: '45m'},
+      {value: 60, label: '1h'},
+      {value: 120, label: '2h'},
+      {value: 180, label: '3h'}
     ], s.refreshMin)
     + group('Theme', 'The watch screen is lit by daylight, so Light reads best outdoors and Dark suits dim rooms and the backlight. Mono is black, white and gray only.', 'theme', [
       {value: 'dark', label: 'Dark'},

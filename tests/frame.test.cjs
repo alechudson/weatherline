@@ -77,7 +77,7 @@ test('rain and snow bar heights follow the lane rules', function() {
   });
 });
 
-test('wind fills the lane at 50 km/h and keeps its direction in 2-degree steps', function() {
+test('wind fills the lane at 50 km/h and snaps direction to 8 compass octants', function() {
   var start = 1794722400;
   function hour(i, kmh, dir) {
     return {time: start + i * 3600, tempC: 20, rainMm: 0, snowCm: 0, cloud: 0, isDay: 1,
@@ -101,10 +101,21 @@ test('wind fills the lane at 50 km/h and keeps its direction in 2-degree steps',
     assert.equal(unpacked.hours[4].windH, 0);
     assert.equal(unpacked.hours[0].windDir, 0);
     assert.equal(unpacked.hours[1].windDir, 0);
-    assert.equal(unpacked.hours[2].windDir, 91);
-    assert.equal(unpacked.hours[3].windDir, 45);
-    assert.equal(unpacked.hours[4].windDir, 255);
+    assert.equal(unpacked.hours[2].windDir, 4);
+    assert.equal(unpacked.hours[3].windDir, 2);
+    assert.equal(unpacked.hours[4].windDir, 15);
   });
+});
+
+test('v4 packs hours into 7 bytes and carries refreshMin in header byte 23', function() {
+  var bytes2 = frame.buildFrame(fixtureForecast('Hill'), {days: 2, unit: 'F', refreshMin: 120}, 'emery', NOW);
+  assert.equal(bytes2.length, 40 + 48 * 7 + 2 * 8);
+  assert.equal(bytes2[23], 120);
+  var unpacked2 = frame.unpackFrame(bytes2);
+  assert.equal(unpacked2.refreshMin, 120);
+  var bytes5 = frame.buildFrame(fixtureForecast('Hill'), {days: 5, unit: 'F', refreshMin: 180}, 'gabbro', NOW);
+  assert.equal(bytes5.length, 40 + 120 * 7 + 5 * 8);
+  assert.equal(frame.unpackFrame(bytes5).refreshMin, 180);
 });
 
 test('each hour carries its temperature and wind speed in the chosen units', function() {
