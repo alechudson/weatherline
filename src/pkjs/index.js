@@ -160,11 +160,11 @@ function sendForecast(cached) {
   });
 }
 
-// The top-line choice has to reach the watch even when there is no forecast to send with it.
+// The top-row and alert preferences have to reach the watch even before any forecast arrives.
 function sendTopLine() {
   var st = settings.readSettings(localStorage);
   var dict = {};
-  dict[messageKeys.TOPLINE] = st.topLine === 'updated' ? 1 : 0;
+  dict[messageKeys.TOPLINE] = frame.packPrefs(st);
   Pebble.sendAppMessage(dict, function() {}, function() {});
 }
 
@@ -236,8 +236,8 @@ function fetchForecast(fix, gen) {
     var previous = forecast.readCache(localStorage);
     var lat = fix.lat;
     var lon = fix.lon;
-    var place = '';
-    if (previous && locate.samePlace(previous, fix)) {
+    var place = fix.place ? forecast.clipPlace(fix.place) : '';
+    if (!place && previous && locate.samePlace(previous, fix)) {
       lat = previous.lat;
       lon = previous.lon;
       place = previous.place || '';
@@ -246,6 +246,7 @@ function fetchForecast(fix, gen) {
       fetchedAt: parsed.fetchedAt,
       utcOffsetSeconds: parsed.utcOffsetSeconds,
       currentC: parsed.currentC,
+      currentApparentC: parsed.currentApparentC,
       hours: parsed.hours,
       days: parsed.days,
       lat: lat,
@@ -267,6 +268,60 @@ function fetchForecast(fix, gen) {
   xhr.send();
 }
 
+function geocodeFixed(query) {
+  var coords = forecast.parseCoords(query);
+  if (coords) {
+    return Promise.resolve({lat: coords.lat, lon: coords.lon, place: ''});
+  }
+  return new Promise(function(resolve) {
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', forecast.geocodeUrl(query));
+    xhr.timeout = 8000;
+    xhr.onload = function() {
+      if (xhr.status !== 200) {
+        resolve(null);
+        return;
+      }
+      resolve(forecast.geocodeFromBody(xhr.responseText));
+    };
+    xhr.onerror = function() { resolve(null); };
+    xhr.ontimeout = xhr.onerror;
+    xhr.send();
+  });
+}
+
+function resolveTarget(st, gen) {
+  if (st.locationMode === 'fixed') {
+    if (st.fixedQuery) {
+      return geocodeFixed(st.fixedQuery).then(function(found) {
+        if (gen !== generation) return null;
+        if (found) {
+          var updated = settings.readSettings(localStorage);
+          updated.fixedLat = found.lat;
+          updated.fixedLon = found.lon;
+          updated.fixedPlace = found.place || updated.fixedPlace || '';
+          updated.fixedQuery = '';
+          settings.writeSettings(localStorage, updated);
+          return found;
+        }
+        if (isNum(st.fixedLat) && isNum(st.fixedLon)) {
+          return {lat: st.fixedLat, lon: st.fixedLon, place: st.fixedPlace || ''};
+        }
+        return null;
+      });
+    }
+    if (isNum(st.fixedLat) && isNum(st.fixedLon)) {
+      return Promise.resolve({lat: st.fixedLat, lon: st.fixedLon, place: st.fixedPlace || ''});
+    }
+  }
+  return locate.resolveFix({
+    storage: localStorage,
+    nowMs: Date.now(),
+    geolocate: geolocate,
+    stillCurrent: function() { return gen === generation; }
+  });
+}
+
 // The stored forecast goes to the watch first only when the face has just started; on a
 // later refresh the watch already shows it, and the result follows soon.
 function cycle(sendFirst) {
@@ -275,12 +330,7 @@ function cycle(sendFirst) {
   var st = settings.readSettings(localStorage);
   var cached = forecast.readCache(localStorage);
   if (sendFirst) sendForecast(cached);
-  locate.resolveFix({
-    storage: localStorage,
-    nowMs: Date.now(),
-    geolocate: geolocate,
-    stillCurrent: function() { return gen === generation; }
-  }).then(function(fix) {
+  resolveTarget(st, gen).then(function(fix) {
     if (gen !== generation) return;
     if (!fix) {
       sendForecast(cached);
@@ -357,11 +407,22 @@ Pebble.addEventListener('showConfiguration', function() {
 });
 
 Pebble.addEventListener('webviewclosed', function(e) {
+  var prev = settings.readSettings(localStorage);
   var stored = settings.applyConfig(localStorage, e && e.response);
   if (!stored) return;
+  var locationChanged = prev.locationMode !== stored.locationMode
+    || prev.fixedLat !== stored.fixedLat
+    || prev.fixedLon !== stored.fixedLon
+    || (stored.locationMode === 'fixed' && !!stored.fixedQuery);
+  if (locationChanged) {
+    checkedAt = 0;
+    localStorage.removeItem(CHECKED_KEY);
+    cycle(false);
+    return;
+  }
   // Redraw the stored forecast with the new settings. A refresh in flight keeps going
   // and re-arms the timer with the new interval when it ends. With no forecast yet, the
-  // top-line choice still goes to the watch on its own.
+  // top-row and alert preferences still go to the watch on their own.
   var cached = forecast.readCache(localStorage);
   if (!sendForecast(cached) && !cached && !busy()) sendTopLine();
   if (!busy()) armRefresh();

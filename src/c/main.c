@@ -6,14 +6,31 @@
 #define REQUEST_PLATFORM 1
 #endif
 #define REQUEST_NEED_FRAME 0x80
+#define BT_VIBE_DELAY_MS 3000
 
 static Window *s_window;
 static Layer *s_layer;
+static AppTimer *s_bt_vibe_timer;
 
 static void paint_regions(uint8_t mask) {
   if (!s_layer || !mask) return;
   face_mark_dirty(mask);
   layer_mark_dirty(s_layer);
+}
+
+static void cancel_bt_vibe(void) {
+  if (s_bt_vibe_timer) {
+    app_timer_cancel(s_bt_vibe_timer);
+    s_bt_vibe_timer = NULL;
+  }
+}
+
+static void bt_vibe_cb(void *context) {
+  (void)context;
+  s_bt_vibe_timer = NULL;
+  if (!bluetooth_connection_service_peek() && face_bt_alert_enabled() && !quiet_time_is_active()) {
+    vibes_double_pulse();
+  }
 }
 
 // The watch asks the phone for a refresh only when the stored frame is missing or past the
@@ -44,8 +61,14 @@ static void battery_handler(BatteryChargeState charge) {
 }
 
 static void bluetooth_handler(bool connected) {
-  if (connected && face_needs_refresh(time(NULL), 0)) {
-    request_refresh(!face_has_frame());
+  if (connected) {
+    cancel_bt_vibe();
+    if (face_needs_refresh(time(NULL), 0)) {
+      request_refresh(!face_has_frame());
+    }
+  } else if (face_bt_alert_enabled() && !quiet_time_is_active()) {
+    cancel_bt_vibe();
+    s_bt_vibe_timer = app_timer_register(BT_VIBE_DELAY_MS, bt_vibe_cb, NULL);
   }
   if (face_bluetooth_changed(connected)) paint_regions(FACE_DIRTY_BT);
 }
@@ -80,10 +103,10 @@ static int tuple_number(const Tuple *tuple) {
 static void inbox_received(DictionaryIterator *iter, void *context) {
   (void)context;
   uint8_t dirty = 0;
-  // The choice can arrive on its own, before any forecast, so the top line updates immediately.
-  int top = tuple_number(dict_find(iter, MESSAGE_KEY_TOPLINE));
-  if ((top == 0 || top == 1) && face_set_top_line(top == 1)) {
-    dirty |= FACE_DIRTY_TOP_CENTER;
+  // Preferences can arrive on their own, before any forecast, so top slots update immediately.
+  int prefs = tuple_number(dict_find(iter, MESSAGE_KEY_TOPLINE));
+  if (prefs >= 0) {
+    dirty |= face_set_prefs(prefs);
   }
   Tuple *tuple = dict_find(iter, MESSAGE_KEY_PAYLOAD);
   if (tuple && tuple->type == TUPLE_BYTE_ARRAY) {
@@ -128,6 +151,7 @@ static void init(void) {
 }
 
 static void deinit(void) {
+  cancel_bt_vibe();
   unobstructed_area_service_unsubscribe();
   app_focus_service_unsubscribe();
   bluetooth_connection_service_unsubscribe();

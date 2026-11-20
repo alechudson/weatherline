@@ -255,7 +255,7 @@ test('saving the top line redraws the stored forecast without a new download', a
   assert.equal(app.requests.length, requests, 'no new download');
   assert.equal(app.sent.length, sent + 1, 'the stored forecast is sent again');
   var bytes = app.sent[app.sent.length - 1][10000];
-  assert.ok(bytes[2] & 0x40, 'the frame asks for the last-updated line');
+  assert.equal(bytes[41] & 0x0F, 1, 'the frame asks for the last-updated line');
   assert.equal(readU32(bytes, 4), 1794790800, 'and the fetch time is unchanged');
 });
 
@@ -263,10 +263,10 @@ test('saving the top line before any forecast tells the watch on its own', funct
   var app = boot({watchInfo: {platform: 'gabbro'}});
   t.after(function() { app.restore(); });
   app.listeners.webviewclosed({
-    response: encodeURIComponent(JSON.stringify({topLine: 'updated'}))
+    response: encodeURIComponent(JSON.stringify({topLine: 'updated', topLeft: 'uv', btAlert: true}))
   });
   assert.equal(app.sent.length, 1);
-  assert.equal(app.sent[0][10002], 1);
+  assert.equal(app.sent[0][10002], 1 | (5 << 4) | 0x100);
   assert.equal(app.sent[0][10000], undefined);
 });
 
@@ -358,4 +358,47 @@ test('failed AppMessage sends back off exponentially and stop after 3 retries', 
   }
   assert.deepEqual(retryDelays, [2000, 4000, 8000]);
   assert.equal(app.sent.length, 4, 'initial attempt plus 3 retries');
+});
+
+test('fixed city location skips phone geolocation and resolves a typed city name on save', async function(t) {
+  var realNow = Date.now;
+  Date.now = function() { return NOW_MS; };
+  var app = boot({watchInfo: {platform: 'emery'}});
+  t.after(function() {
+    app.restore();
+    Date.now = realNow;
+  });
+
+  app.listeners.webviewclosed({
+    response: encodeURIComponent(JSON.stringify({
+      locationMode: 'fixed',
+      fixedLat: 39.74,
+      fixedLon: -104.99,
+      fixedPlace: 'Denver'
+    }))
+  });
+  await settle();
+  await settle();
+  assert.equal(app.geoCalls(), 0, 'no phone geolocation for fixed city');
+  assert.equal(app.requests.length, 1, 'forecast fetched directly');
+  assert.ok(app.requests[0].url.indexOf('latitude=39.74&longitude=-104.99') > 0);
+  answer(app.requests[0], forecastBody());
+  assert.equal(app.requests.length, 1, 'no reverse geocode needed when fixedPlace is set');
+  assert.equal(app.sent.length, 1);
+
+  // Saving a typed city query resolves it via Open-Meteo geocoding without phone GPS.
+  app.listeners.webviewclosed({
+    response: encodeURIComponent(JSON.stringify({
+      locationMode: 'fixed',
+      fixedQuery: 'Seattle'
+    }))
+  });
+  await settle();
+  assert.equal(app.geoCalls(), 0, 'still zero phone geolocation');
+  assert.ok(app.requests[1].url.indexOf('geocoding-api.open-meteo.com') > 0);
+  answer(app.requests[1], JSON.stringify({
+    results: [{name: 'Seattle', latitude: 47.61, longitude: -122.33}]
+  }));
+  await settle();
+  assert.ok(app.requests[2].url.indexOf('latitude=47.61&longitude=-122.33') > 0);
 });

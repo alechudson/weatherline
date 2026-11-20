@@ -64,15 +64,18 @@ pebble install --phone <ip>
 
 ## Settings
 
-Open the config page from the Pebble phone app. There are five settings.
+Open the config page from the Pebble phone app.
 
 - Days shown are 1, 2, 3, or 5. The default is 2.
 - The temperature unit is °F or °C. The default is °F.
+- The temperature line can plot **Actual** air temperature (default) or **Feels like** (apparent) temperature. When the chart range crosses freezing (32°F / 0°C), a faint dotted reference line marks freezing.
 - Refresh is every 30 minutes, 45 minutes, 1 hour, 2 hours, or 3 hours. The default is 1 hour.
 - The theme is Dark, Light or Mono. The default is Dark. Mono uses only black, white and grays: warmer than yesterday is a bright checker, colder is gray horizontal lines, and night is a light bar under the chart instead of a band behind it. The low-battery and Bluetooth warnings stay red.
-- The top line is Wind speed or Last updated. The default is Wind speed. Last updated shows a small refresh mark and the local time of the last successful fetch, following the watch's 12- or 24-hour setting, as in the mark beside `11:42`. It is kept on the watch, so it is still there after the app restarts. Before the first successful fetch the time is `--:--`, mark and all, and it changes only when a fetch succeeds, so a time that does not move means fetches are failing.
+- The top-left and top-center slots beside the battery are each configurable. Both offer **Feels like**, **Humidity**, **UV index**, **Sunrise / sunset** (next upcoming event), or **Off**. The top left also offers **Steps** (its default). The top center also offers **Wind speed** (its default) and **Last updated** (refresh mark + local time of last successful fetch).
+- **Bluetooth disconnect alert** optionally triggers a brief double-buzz if the phone stays disconnected for 3 seconds (silent during Quiet Time).
+- **Location** can be **Automatic** (default) or a **Fixed city** (searchable by city name via Open-Meteo geocoding or entered as `lat, lon`), which skips phone geolocation completely.
 
-Changing the day count, the unit, the theme, or the top line redraws the forecast already stored on the phone. It does not download again, and the watch applies it without a restart.
+Changing display settings redraws the forecast already stored on the phone without downloading again, and the watch applies them without a restart. During a Pebble Timeline Quick View, the face automatically switches to a compact layout so the time, current temperature, date, and top row remain readable above the Quick View card.
 
 The phone tries a network location first (accepting fixes up to 15 minutes old), reuses a recent cached fix instead of waking GPS indoors, and only falls back to GPS if no fix from the last 6 hours is available. The watch asks the phone for a refresh only when its stored forecast is missing or past the configured refresh interval (and stays silent over Bluetooth during Quiet Time while the forecast still covers the current hour). To save watch and phone battery, the phone persists its last refresh timestamp and frame hash across restarts so returning to the watchface does not re-check location or resend an unchanged frame, bit-packs hourly records to shrink Bluetooth transfers and flash writes, looks up the place name only when the location changes, and caches the static chart on the watch so normal minute ticks repaint only the time band. If a refresh fails, the watch keeps showing the last forecast, and the temperature follows the forecast hour by hour until it runs out.
 

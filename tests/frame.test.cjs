@@ -107,15 +107,47 @@ test('wind fills the lane at 50 km/h and snaps direction to 8 compass octants', 
   });
 });
 
-test('v4 packs hours into 7 bytes and carries refreshMin in header byte 23', function() {
+test('v5 packs hours into 9 bytes and carries refreshMin, freezeY, slots, feels, humidity, UV, and sun events', function() {
   var bytes2 = frame.buildFrame(fixtureForecast('Hill'), {days: 2, unit: 'F', refreshMin: 120}, 'emery', NOW);
-  assert.equal(bytes2.length, 40 + 48 * 7 + 2 * 8);
+  assert.equal(bytes2.length, 44 + 48 * 9 + 2 * 8);
   assert.equal(bytes2[23], 120);
   var unpacked2 = frame.unpackFrame(bytes2);
   assert.equal(unpacked2.refreshMin, 120);
+  assert.equal(unpacked2.freezeY, 255);
   var bytes5 = frame.buildFrame(fixtureForecast('Hill'), {days: 5, unit: 'F', refreshMin: 180}, 'gabbro', NOW);
-  assert.equal(bytes5.length, 40 + 120 * 7 + 5 * 8);
+  assert.equal(bytes5.length, 44 + 120 * 9 + 5 * 8);
   assert.equal(frame.unpackFrame(bytes5).refreshMin, 180);
+
+  var start = 1794722400;
+  var cold = {
+    fetchedAt: NOW,
+    utcOffsetSeconds: -21600,
+    currentC: 2,
+    currentApparentC: -3,
+    place: 'Frost',
+    days: [{time: start, minC: -5, maxC: 5, sunrise: NOW + 1000, sunset: NOW + 36000}],
+    hours: [
+      {time: start, tempC: -5, apparentC: -9, rainMm: 0, snowCm: 0, cloud: 20, isDay: 0, humidity: 82, uv: 0},
+      {time: start + 3600, tempC: 5, apparentC: 1, rainMm: 0, snowCm: 0, cloud: 40, isDay: 1, humidity: 55, uv: 11}
+    ]
+  };
+  var built = frame.buildFrame(cold, {
+    days: 1, unit: 'C', refreshMin: 60, tempMode: 'feels', topLeft: 'uv', topLine: 'sun', btAlert: true
+  }, 'emery', NOW);
+  var u = frame.unpackFrame(built);
+  assert.ok(u.freezeY < frame.layouts.emery.plot.h, 'freezing line sits inside plot when crossing 0C');
+  assert.equal(u.tempMode, 'feels');
+  assert.equal(u.btAlert, true);
+  assert.equal(u.topLeft, 'uv');
+  assert.equal(u.topLine, 'sun');
+  assert.equal(u.currentDeg, -3);
+  assert.equal(u.currentFeels, -3);
+  assert.deepEqual(u.hours.map(function(h) { return h.feelsDeg; }), [-9, 1]);
+  assert.deepEqual(u.hours.map(function(h) { return h.humidity; }), [82, 55]);
+  assert.deepEqual(u.hours.map(function(h) { return h.uv; }), [0, 11]);
+  assert.equal(u.sunEvents.length, 2);
+  assert.equal(u.sunEvents[0].sunrise, true);
+  assert.equal(u.sunEvents[1].sunrise, false);
 });
 
 test('each hour carries its temperature and wind speed in the chosen units', function() {
@@ -211,18 +243,21 @@ test('the mono theme sets its own flag and keeps the unit', function() {
   assert.equal(bytes[2], 0x22);
 });
 
-test('the top line flag rides with the unit and does not restamp the fetch time', function() {
+test('the top row slots ride in header byte 41 and do not restamp the fetch time', function() {
   var forecastValue = fixtureForecast('Hill');
   forecastValue.fetchedAt = NOW - 3600;
   var bytes = frame.buildFrame(forecastValue,
-    {days: 2, unit: 'C', refreshMin: 60, theme: 'light', topLine: 'updated'}, 'emery', NOW);
+    {days: 2, unit: 'C', refreshMin: 60, theme: 'light', topLeft: 'humidity', topLine: 'updated'},
+    'emery', NOW);
   var updated = frame.unpackFrame(bytes);
-  assert.equal(bytes[2], 0x52);
+  assert.equal(bytes[2], 0x12);
   assert.equal(updated.topLine, 'updated');
+  assert.equal(updated.topLeft, 'humidity');
   assert.equal(updated.theme, 'light');
   assert.equal(updated.unit, 'C');
   assert.equal(updated.fetchedAt, NOW - 3600);
   var wind = frame.unpackFrame(frame.buildFrame(forecastValue, settings(2, 'F'), 'emery', NOW));
   assert.equal(wind.topLine, 'wind');
+  assert.equal(wind.topLeft, 'steps');
   assert.equal(wind.fetchedAt, NOW - 3600);
 });

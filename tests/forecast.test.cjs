@@ -138,7 +138,50 @@ test('readCache rejects a shape that is not a forecast and round-trips a real on
 test('forecast URL prints latitude and longitude with Number conversion', function() {
   var url = forecast.forecastUrl('30.5', -97.5);
   assert.equal(url.indexOf('latitude=30.5&longitude=-97.5&') > 0, true);
-  assert.equal(url.indexOf('hourly=temperature_2m,rain,showers,snowfall,cloud_cover,is_day,'
-    + 'wind_speed_10m,wind_direction_10m&') > 0, true);
+  assert.equal(url.indexOf('apparent_temperature') > 0, true);
+  assert.equal(url.indexOf('relative_humidity_2m') > 0, true);
+  assert.equal(url.indexOf('uv_index') > 0, true);
+  assert.equal(url.indexOf('sunrise,sunset') > 0, true);
   assert.equal(url.indexOf('wind_speed_unit=kmh') > 0, true);
+});
+
+test('parses apparent temp, humidity, UV, sunrise/sunset, geocoding, and coordinate strings', function() {
+  var body = JSON.stringify({
+    utc_offset_seconds: -21600,
+    current: {temperature_2m: 12, apparent_temperature: 9.4},
+    hourly: {
+      time: [1794722400],
+      temperature_2m: [12],
+      apparent_temperature: [9.4],
+      rain: [0],
+      showers: [0],
+      snowfall: [0],
+      cloud_cover: [20],
+      is_day: [1],
+      wind_speed_10m: [15],
+      wind_direction_10m: [180],
+      relative_humidity_2m: [63.6],
+      uv_index: [7.2]
+    },
+    daily: {
+      time: [1794722400],
+      temperature_2m_max: [18],
+      temperature_2m_min: [5],
+      sunrise: [1794747000],
+      sunset: [1794785000]
+    }
+  });
+  var parsed = forecast.parseForecast(body, 1794722400);
+  assert.equal(parsed.currentApparentC, 9.4);
+  assert.equal(parsed.hours[0].apparentC, 9.4);
+  assert.equal(parsed.hours[0].humidity, 64);
+  assert.equal(parsed.hours[0].uv, 7);
+  assert.equal(parsed.days[0].sunrise, 1794747000);
+  assert.equal(parsed.days[0].sunset, 1794785000);
+
+  assert.deepEqual(forecast.parseCoords('40.71, -74.00'), {lat: 40.71, lon: -74});
+  assert.equal(forecast.parseCoords('95, 0'), null);
+  assert.deepEqual(forecast.geocodeFromBody(JSON.stringify({
+    results: [{name: 'Denver', latitude: 39.74, longitude: -104.99}]
+  })), {lat: 39.74, lon: -104.99, place: 'Denver'});
 });

@@ -1,27 +1,44 @@
 #include "face.h"
 #include "layout.h"
 
-#define FACE_VERSION 4
-#define FACE_HOUR_BYTES 7
+#define FACE_VERSION 5
+#define FACE_HEADER_BYTES 44
+#define FACE_HOUR_BYTES 9
 #define FACE_DAY_BYTES 8
 #define FACE_MAX_HOURS 144
 #define FACE_MAX_DAYS 6
+#define FACE_MAX_SUNS 8
 #define FACE_CHUNK 240
 #define FACE_LEN_KEY 1
 #define FACE_DATA_KEY 2
-// Frame chunks use keys from FACE_DATA_KEY upward. This sits clear of them.
+// Frame chunks use keys from FACE_DATA_KEY upward. These sit clear of them.
 #define FACE_TOP_KEY 100
-#define FACE_NO_ROW 255
+#define FACE_PREFS_KEY 101
+#define FACE_NO_ROW 127
 #define FACE_NO_DIR 15
 #define FACE_NO_SPEED 255
 #define FACE_NO_DEG -32768
+#define FACE_NO_FEELS -128
+#define FACE_NO_HUMIDITY 255
+#define FACE_NO_UV 15
+#define FACE_NO_FREEZE 255
 
-// The unit byte in the frame header carries this flag when the light theme is chosen.
+// Header flags byte (byte 2).
 #define FACE_LIGHT_FLAG 0x10
-// And this one when the mono theme is chosen: black, white and grays only.
 #define FACE_MONO_FLAG 0x20
-// And this one when the top line shows the last successful fetch instead of the wind.
-#define FACE_UPDATED_FLAG 0x40
+#define FACE_BT_ALERT_FLAG 0x40
+#define FACE_FEELS_CHART_FLAG 0x80
+
+// Top-row slot choices (packed in frame byte 41 and MESSAGE_KEY_TOPLINE).
+#define SLOT_WIND 0
+#define SLOT_UPDATED 1
+#define SLOT_STEPS 2
+#define SLOT_FEELS 3
+#define SLOT_HUMIDITY 4
+#define SLOT_UV 5
+#define SLOT_SUN 6
+#define SLOT_OFF 7
+#define SLOT_COUNT 8
 
 #if defined(PBL_ROUND)
 #define FACE_PLATFORM 2
@@ -55,7 +72,10 @@ typedef struct {
   uint8_t wind_h;
   uint8_t wind_dir;
   int8_t deg;
+  int8_t feels_deg;
   uint8_t wind_speed;
+  uint8_t humidity;
+  uint8_t uv;
 } FaceHour;
 
 typedef struct {
@@ -72,10 +92,16 @@ typedef struct {
   bool light;
   bool mono;
   bool metric;
-  bool top_updated;
+  bool bt_alert;
+  bool feels_chart;
+  uint8_t top_left;
+  uint8_t top_center;
   uint8_t hour_count;
   uint8_t day_count;
+  uint8_t sun_count;
   uint8_t refresh_min;
+  uint8_t freeze_y;
+  int8_t current_feels;
   uint32_t fetched_at;
   uint32_t window_start;
   uint32_t window_end;
@@ -84,6 +110,7 @@ typedef struct {
   char place[16];
   FaceHour hours[FACE_MAX_HOURS];
   FaceDay days[FACE_MAX_DAYS];
+  uint32_t sun_events[FACE_MAX_SUNS];
 } Face;
 
 // Where one day's labels go: its name and high along the top of the chart, its low along the
@@ -130,8 +157,10 @@ typedef struct {
 
 static Face s_face;
 static Face s_scratch;
-// Kept apart from the frame so it survives before the first forecast, and a restart.
-static bool s_show_updated;
+// Kept apart from the frame so preferences survive before the first forecast, and a restart.
+static uint8_t s_top_left = SLOT_STEPS;
+static uint8_t s_top_center = SLOT_WIND;
+static bool s_bt_alert = false;
 // The frame as stored on the watch, so a repeat of it skips the flash write.
 static uint8_t s_blob[FACE_MAX_BYTES];
 static int s_blob_len = 0;
@@ -147,7 +176,9 @@ static uint8_t s_dirty = FACE_DIRTY_ALL;
 static int s_last_now_px = -2;
 static int s_last_temp_now = FACE_NO_DEG;
 static bool s_last_temp_stale = false;
+static int s_last_feels_now = FACE_NO_FEELS;
 static int s_last_hour_now = -2;
+static int s_last_sun_idx = -2;
 static int s_last_steps = -2;
 static bool s_health_checked = false;
 static bool s_health_avail = false;
@@ -155,6 +186,7 @@ static uint8_t s_last_charge_pct = 255;
 static bool s_last_charging = false;
 static int8_t s_last_bt = -1;
 static bool s_last_24h = false;
+static bool s_quick_view = false;
 
 static const char *WEEKDAYS[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
 
@@ -271,14 +303,18 @@ static void prepare_frame(void);
 
 static bool unpack(Face *face, const uint8_t *data, int len) {
   memset(face, 0, sizeof(*face));
-  if (!data || len < 40 || len > FACE_MAX_BYTES) return false;
+  if (!data || len < FACE_HEADER_BYTES || len > FACE_MAX_BYTES) return false;
   if (data[0] != FACE_VERSION || data[1] != FACE_PLATFORM) return false;
   uint8_t hour_count = data[3];
   uint8_t day_count = data[22];
   uint8_t refresh_min = data[23];
-  int expect = 40 + (int)hour_count * FACE_HOUR_BYTES + (int)day_count * FACE_DAY_BYTES;
+  uint8_t freeze_y = data[40];
+  uint8_t slots = data[41];
+  uint8_t sun_count = data[42];
+  int expect = FACE_HEADER_BYTES + (int)hour_count * FACE_HOUR_BYTES
+               + (int)day_count * FACE_DAY_BYTES + (int)sun_count * 4;
   if (expect != len) return false;
-  if (hour_count > FACE_MAX_HOURS || day_count > FACE_MAX_DAYS) {
+  if (hour_count > FACE_MAX_HOURS || day_count > FACE_MAX_DAYS || sun_count > FACE_MAX_SUNS) {
     return false;
   }
 
@@ -286,10 +322,18 @@ static bool unpack(Face *face, const uint8_t *data, int len) {
   face->light = (data[2] & FACE_LIGHT_FLAG) != 0;
   face->mono = !face->light && (data[2] & FACE_MONO_FLAG) != 0;
   face->metric = (data[2] & 0x0F) == 2;
-  face->top_updated = (data[2] & FACE_UPDATED_FLAG) != 0;
+  face->bt_alert = (data[2] & FACE_BT_ALERT_FLAG) != 0;
+  face->feels_chart = (data[2] & FACE_FEELS_CHART_FLAG) != 0;
+  uint8_t center = slots & 0x0F;
+  uint8_t left = (slots >> 4) & 0x0F;
+  face->top_center = center < SLOT_COUNT ? center : SLOT_WIND;
+  face->top_left = left < SLOT_COUNT ? left : SLOT_STEPS;
   face->hour_count = hour_count;
   face->day_count = day_count;
+  face->sun_count = sun_count;
   face->refresh_min = refresh_min ? refresh_min : 60;
+  face->freeze_y = freeze_y;
+  face->current_feels = (int8_t)data[43];
   face->fetched_at = read_u32(data + 4);
   face->window_start = read_u32(data + 8);
   face->window_end = read_u32(data + 12);
@@ -298,14 +342,16 @@ static bool unpack(Face *face, const uint8_t *data, int len) {
   memcpy(face->place, data + 24, 16);
   face->place[15] = 0;
 
-  const uint8_t *p = data + 40;
+  const uint8_t *p = data + FACE_HEADER_BYTES;
   int i;
   for (i = 0; i < hour_count; i++) {
+    uint8_t b0 = p[0];
+    uint8_t b1 = p[1];
     uint8_t precip = p[4];
     uint8_t sky = p[5];
     uint8_t wind = p[6];
-    face->hours[i].temp_y = p[0];
-    face->hours[i].prev_y = p[1];
+    face->hours[i].temp_y = b0 & 0x7F;
+    face->hours[i].prev_y = b1 & 0x7F;
     face->hours[i].deg = (int8_t)p[2];
     face->hours[i].wind_speed = p[3];
     face->hours[i].rain_h = precip & 0x0F;
@@ -314,6 +360,9 @@ static bool unpack(Face *face, const uint8_t *data, int len) {
     face->hours[i].night = (sky >> 5) & 1;
     face->hours[i].wind_h = wind & 0x0F;
     face->hours[i].wind_dir = (wind >> 4) & 0x0F;
+    face->hours[i].feels_deg = (int8_t)p[7];
+    face->hours[i].humidity = p[8];
+    face->hours[i].uv = ((sky >> 6) & 3) | (((b0 >> 7) & 1) << 2) | (((b1 >> 7) & 1) << 3);
     p += FACE_HOUR_BYTES;
   }
   for (i = 0; i < day_count; i++) {
@@ -324,6 +373,10 @@ static bool unpack(Face *face, const uint8_t *data, int len) {
     face->days[i].wday = p[6];
     face->days[i].mday = p[7];
     p += FACE_DAY_BYTES;
+  }
+  for (i = 0; i < sun_count; i++) {
+    face->sun_events[i] = read_u32(p);
+    p += 4;
   }
   return true;
 }
@@ -343,31 +396,45 @@ static void save_bytes(const uint8_t *data, int len) {
   persist_write_int(FACE_LEN_KEY, len);
 }
 
-// Writes the choice only when it changes. The default (wind, nothing stored) stays unwritten
-// so an upgrade does not touch the flash. Returns true if the visible choice changed.
-static bool apply_top(bool updated) {
-  bool changed = s_show_updated != updated;
-  bool known = persist_exists(FACE_TOP_KEY);
-  if ((!known && !updated) || (known && persist_read_bool(FACE_TOP_KEY) == updated)) {
-    s_show_updated = updated;
-    return changed;
+static int pack_prefs(uint8_t center, uint8_t left, bool bt_alert) {
+  return (int)(center & 0x0F) | ((int)(left & 0x0F) << 4) | (bt_alert ? 0x100 : 0);
+}
+
+// Writes preferences only when they change. Defaults stay unwritten so a fresh install
+// does not touch flash unnecessarily.
+static uint8_t apply_prefs(uint8_t center, uint8_t left, bool bt_alert) {
+  if (center >= SLOT_COUNT) center = SLOT_WIND;
+  if (left >= SLOT_COUNT) left = SLOT_STEPS;
+  uint8_t dirty = 0;
+  if (s_top_center != center) dirty |= FACE_DIRTY_TOP_CENTER;
+  if (s_top_left != left) dirty |= FACE_DIRTY_STEPS;
+  s_top_center = center;
+  s_top_left = left;
+  s_bt_alert = bt_alert;
+  int packed = pack_prefs(center, left, bt_alert);
+  int def = pack_prefs(SLOT_WIND, SLOT_STEPS, false);
+  bool known = persist_exists(FACE_PREFS_KEY);
+  if ((!known && packed == def) || (known && persist_read_int(FACE_PREFS_KEY) == packed)) {
+    return dirty;
   }
-  s_show_updated = updated;
-  persist_write_bool(FACE_TOP_KEY, updated);
-  return changed;
+  persist_write_int(FACE_PREFS_KEY, packed);
+  return dirty;
 }
 
 bool face_has_frame(void) {
   return s_face.ok;
 }
 
+bool face_bt_alert_enabled(void) {
+  return s_bt_alert;
+}
+
 uint8_t face_set_frame(const uint8_t *data, int len) {
   if (s_face.ok && len == s_blob_len && memcmp(data, s_blob, (size_t)len) == 0) return 0;
   if (!unpack(&s_scratch, data, len)) return 0;
   bool full = !s_face.ok || s_scratch.light != s_face.light || s_scratch.mono != s_face.mono;
-  bool top_changed = apply_top(s_scratch.top_updated);
+  uint8_t pref_dirty = apply_prefs(s_scratch.top_center, s_scratch.top_left, s_scratch.bt_alert);
   bool meta_changed = full || strncmp(s_face.place, s_scratch.place, sizeof(s_face.place)) != 0;
-  bool top_center_changed = top_changed || !s_show_updated || s_scratch.fetched_at != s_face.fetched_at;
   s_face = s_scratch;
   prepare_frame();
   s_chart_cache_valid = false;
@@ -375,18 +442,31 @@ uint8_t face_set_frame(const uint8_t *data, int len) {
   memcpy(s_blob, data, (size_t)len);
   s_blob_len = len;
   if (full) return FACE_DIRTY_ALL;
-  uint8_t mask = FACE_DIRTY_CHART;
+  uint8_t mask = FACE_DIRTY_CHART | pref_dirty;
   if (meta_changed) mask |= FACE_DIRTY_META;
-  if (top_center_changed) mask |= FACE_DIRTY_TOP_CENTER;
+  if (s_top_left != SLOT_STEPS && s_top_left != SLOT_OFF) mask |= FACE_DIRTY_STEPS;
+  if (s_top_center != SLOT_STEPS && s_top_center != SLOT_OFF) mask |= FACE_DIRTY_TOP_CENTER;
   return mask;
 }
 
-bool face_set_top_line(bool updated) {
-  return apply_top(updated);
+uint8_t face_set_prefs(int packed) {
+  uint8_t center = (uint8_t)(packed & 0x0F);
+  uint8_t left = (uint8_t)((packed >> 4) & 0x0F);
+  bool bt_alert = (packed & 0x100) != 0;
+  return apply_prefs(center, left, bt_alert);
 }
 
 void face_load(void) {
-  if (persist_exists(FACE_TOP_KEY)) s_show_updated = persist_read_bool(FACE_TOP_KEY);
+  if (persist_exists(FACE_PREFS_KEY)) {
+    int packed = persist_read_int(FACE_PREFS_KEY);
+    uint8_t center = (uint8_t)(packed & 0x0F);
+    uint8_t left = (uint8_t)((packed >> 4) & 0x0F);
+    s_top_center = center < SLOT_COUNT ? center : SLOT_WIND;
+    s_top_left = left < SLOT_COUNT ? left : SLOT_STEPS;
+    s_bt_alert = (packed & 0x100) != 0;
+  } else if (persist_exists(FACE_TOP_KEY)) {
+    s_top_center = persist_read_bool(FACE_TOP_KEY) ? SLOT_UPDATED : SLOT_WIND;
+  }
   if (!persist_exists(FACE_LEN_KEY)) return;
   int len = persist_read_int(FACE_LEN_KEY);
   if (len <= 0 || len > FACE_MAX_BYTES) return;
@@ -403,8 +483,11 @@ void face_load(void) {
   if (!unpack(&s_scratch, s_blob, len)) return;
   s_face = s_scratch;
   s_blob_len = len;
-  // A choice saved on its own, before any forecast, wins over a frame that predates it.
-  if (!persist_exists(FACE_TOP_KEY)) s_show_updated = s_face.top_updated;
+  if (!persist_exists(FACE_PREFS_KEY) && !persist_exists(FACE_TOP_KEY)) {
+    s_top_center = s_face.top_center;
+    s_top_left = s_face.top_left;
+    s_bt_alert = s_face.bt_alert;
+  }
   prepare_frame();
   s_chart_cache_valid = false;
 }
@@ -1196,10 +1279,23 @@ static void draw_precip(GContext *ctx, const Theme *t) {
   }
 }
 
+// Faint dotted reference hairline at 32°F / 0°C when the visible range crosses freezing.
+static void draw_freezing_line(GContext *ctx, const Theme *t) {
+  if (s_face.freeze_y == FACE_NO_FREEZE || s_face.freeze_y >= LAYOUT.plot.h) return;
+  int y = LAYOUT.plot.y + s_face.freeze_y;
+  int px;
+  graphics_context_set_antialiased(ctx, false);
+  graphics_context_set_stroke_color(ctx, t->muted);
+  for (px = 0; px < LAYOUT.plot.w; px += 4) {
+    graphics_draw_pixel(ctx, GPoint(LAYOUT.plot.x + px, y));
+  }
+}
+
 static void draw_static_chart(GContext *ctx, const Theme *t) {
   draw_night(ctx, t);
   draw_sky(ctx, t);
   draw_fronts(ctx, t);
+  draw_freezing_line(ctx, t);
   draw_line(ctx, t);
   draw_wind(ctx, t);
   draw_precip(ctx, t);
@@ -1292,7 +1388,7 @@ void face_deinit(void) {
   s_time_font = NULL;
 }
 
-static void draw_time(GContext *ctx, const Theme *t, struct tm *local) {
+static void draw_time_at(GContext *ctx, const Theme *t, struct tm *local, int box_y) {
   char text[8];
   const char *ampm = NULL;
   if (clock_is_24h_style()) {
@@ -1315,27 +1411,27 @@ static void draw_time(GContext *ctx, const Theme *t, struct tm *local) {
     x = LAYOUT.time.x + (LAYOUT.time.w - (time_size.w + gap + am_size.w)) / 2;
   }
   // The font's box has empty space above the digits; the layout's time box is the digits.
-  int y = LAYOUT.time.y - TIME_TOP_PAD;
+  int y = box_y - TIME_TOP_PAD;
   draw_text(ctx, text, time_font, GRect(x, y, time_size.w + 4, time_size.h + 4), GTextAlignmentLeft,
             t->text);
   if (ampm) {
     draw_text(ctx, ampm, small,
-              GRect(x + time_size.w + gap, LAYOUT.time.y + LAYOUT.time.h - am_size.h - 6,
+              GRect(x + time_size.w + gap, box_y + LAYOUT.time.h - am_size.h - 6,
                     am_size.w, am_size.h),
               GTextAlignmentLeft, t->accent);
   }
 }
 
-// One line under the time: the date and place, dropping the place when it does not fit. The
-// temperature lives on the chart; it joins this line, grayed, only when now has run past the
-// forecast and the chart has no marker to carry it.
-static void draw_meta(GContext *ctx, const Theme *t, struct tm *local, time_t now) {
+// One line under (or above on Round 2) the time: the date and place, dropping the place when it
+// does not fit. Shows the current temperature too when the chart is hidden (Quick View) or expired.
+static void draw_meta_at(GContext *ctx, const Theme *t, struct tm *local, time_t now, int box_y,
+                         bool force_temp) {
   const char *wday = (local->tm_wday >= 0 && local->tm_wday <= 6) ? WEEKDAYS[local->tm_wday] : "";
   GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_18);
   char date[16];
   char temp[16] = "";
   snprintf(date, sizeof(date), "%s %d", wday, local->tm_mday);
-  if (s_face.ok && now_px(now) < 0) {
+  if (s_face.ok && (force_temp || now_px(now) < 0)) {
     bool stale;
     int deg = temp_now(now, &stale);
     if (deg != FACE_NO_DEG) snprintf(temp, sizeof(temp), "%d\xc2\xb0  \xc2\xb7  ", deg);
@@ -1345,7 +1441,7 @@ static void draw_meta(GContext *ctx, const Theme *t, struct tm *local, time_t no
   if (!s_face.ok || !s_face.place[0] || text_size(line, font).w > LAYOUT.meta.w) {
     snprintf(line, sizeof(line), "%s%s", temp, date);
   }
-  draw_fitted(ctx, line, font, GRect(LAYOUT.meta.x, LAYOUT.meta.y, LAYOUT.meta.w, LAYOUT.meta.h),
+  draw_fitted(ctx, line, font, GRect(LAYOUT.meta.x, box_y, LAYOUT.meta.w, LAYOUT.meta.h),
               GTextAlignmentCenter, t->muted);
 }
 
@@ -1374,8 +1470,18 @@ static void format_grouped(char *out, int value) {
   }
 }
 
-// A clockwise refresh mark, arrowhead at the upper right. Whole pixels, like the battery and
-// the Bluetooth rune, so it stays sharp. The ink is centered on (4, 4).
+static void draw_pixel_mark(GContext *ctx, const int8_t (*pts)[2], int count,
+                            int ox, int oy, GColor color) {
+  graphics_context_set_antialiased(ctx, false);
+  graphics_context_set_stroke_width(ctx, 1);
+  graphics_context_set_stroke_color(ctx, color);
+  int i;
+  for (i = 0; i < count; i++) {
+    graphics_draw_pixel(ctx, GPoint(ox + pts[i][0], oy + pts[i][1]));
+  }
+}
+
+// A clockwise refresh mark, arrowhead at the upper right. Centered on (4, 4).
 static const int8_t UPDATED_MARK[][2] = {
   {3, 1}, {4, 1}, {5, 1},
   {2, 2}, {6, 2}, {7, 2},
@@ -1386,73 +1492,63 @@ static const int8_t UPDATED_MARK[][2] = {
   {3, 7}, {4, 7}, {5, 7}, {6, 7}
 };
 
-static void draw_updated_mark(GContext *ctx, int cx, int cy, GColor color) {
-  graphics_context_set_antialiased(ctx, false);
-  graphics_context_set_stroke_width(ctx, 1);
-  graphics_context_set_stroke_color(ctx, color);
-  int i;
-  for (i = 0; i < (int)ARRAY_LENGTH(UPDATED_MARK); i++) {
-    graphics_draw_pixel(ctx, GPoint(cx + UPDATED_MARK[i][0] - 4, cy + UPDATED_MARK[i][1] - 4));
+// 5x7 water droplet for humidity, centered on (2, 3).
+static const int8_t DROP_MARK[][2] = {
+  {2, 0},
+  {1, 1}, {3, 1},
+  {1, 2}, {3, 2},
+  {0, 3}, {4, 3},
+  {0, 4}, {4, 4},
+  {0, 5}, {4, 5},
+  {1, 6}, {2, 6}, {3, 6}
+};
+
+// 7x7 sunrise (up arrow over horizon) and sunset (down arrow over horizon), centered on (3, 3).
+static const int8_t SUNRISE_MARK[][2] = {
+  {3, 0},
+  {2, 1}, {3, 1}, {4, 1},
+  {1, 2}, {3, 2}, {5, 2},
+  {3, 3},
+  {3, 4},
+  {0, 6}, {1, 6}, {2, 6}, {3, 6}, {4, 6}, {5, 6}, {6, 6}
+};
+
+static const int8_t SUNSET_MARK[][2] = {
+  {3, 0},
+  {3, 1},
+  {1, 2}, {3, 2}, {5, 2},
+  {2, 3}, {3, 3}, {4, 3},
+  {3, 4},
+  {0, 6}, {1, 6}, {2, 6}, {3, 6}, {4, 6}, {5, 6}, {6, 6}
+};
+
+static void format_clock(char *out, size_t cap, time_t ts) {
+  struct tm when = *localtime(&ts);
+  if (clock_is_24h_style()) {
+    snprintf(out, cap, "%02d:%02d", when.tm_hour, when.tm_min);
+  } else {
+    int hour = when.tm_hour % 12;
+    if (hour == 0) hour = 12;
+    snprintf(out, cap, "%d:%02d", hour, when.tm_min);
   }
 }
 
-// Local time of the last successful fetch: the refresh mark, then the clock, following the
-// watch's 12/24-hour setting. The stamp is the frame's fetched_at, which is stored with the
-// forecast, so it is still there after a restart and does not move when a fetch fails.
-// Before any success the time is "--:--", with the mark still beside it.
-static void draw_updated(GContext *ctx, const Theme *t) {
-  char text[8];
-  const char *shown = "--:--";
-  GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_14);
-  if (s_face.ok && s_face.fetched_at > 0) {
-    time_t fetched = (time_t)s_face.fetched_at;
-    struct tm when = *localtime(&fetched);
-    if (clock_is_24h_style()) {
-      snprintf(text, sizeof(text), "%02d:%02d", when.tm_hour, when.tm_min);
-    } else {
-      int hour = when.tm_hour % 12;
-      if (hour == 0) hour = 12;
-      snprintf(text, sizeof(text), "%d:%02d", hour, when.tm_min);
-    }
-    shown = text;
-  }
-  GSize size = text_size(shown, font);
-  // The mark's ink is 8px wide. A short gap, about a space, sits between it and the digits.
-  int mark_w = 8;
-  int gap = 3;
-  int left = LAYOUT.windnow.x + (LAYOUT.windnow.w - mark_w - gap - size.w) / 2;
-  // Digit ink is centered on the middle of this slot. The mark is centered on the same row.
-  int cy = LAYOUT.windnow.y + LAYOUT.windnow.h / 2;
-  draw_updated_mark(ctx, left + 3, cy, t->muted);
-  draw_text(ctx, shown, font,
-            GRect(left + mark_w + gap, LAYOUT.windnow.y - 1, size.w + 2, LAYOUT.windnow.h + 2),
-            GTextAlignmentLeft, t->muted);
-}
-
-// The current hour's wind: a small barb and the speed, with the unit when it fits.
-static void draw_wind_now(GContext *ctx, const Theme *t, time_t now) {
+static int feels_now(time_t now) {
+  if (!s_face.ok) return FACE_NO_FEELS;
+  if (s_face.current_feels != FACE_NO_FEELS && reading_fresh(now)) return s_face.current_feels;
   int i = hour_now(now);
-  if (i < 0) return;
-  FaceHour hour = s_face.hours[i];
-  if (hour.wind_speed == FACE_NO_SPEED) return;
-  GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_14);
-  char text[16];
-  snprintf(text, sizeof(text), "%d %s", hour.wind_speed, s_face.metric ? "km/h" : "mph");
-  bool arrow = hour.wind_dir != FACE_NO_DIR;
-  int arrow_w = arrow ? 14 : 0;
-  GSize size = text_size(text, font);
-  if (arrow_w + size.w > LAYOUT.windnow.w - 6) {
-    snprintf(text, sizeof(text), "%d", hour.wind_speed);
-    size = text_size(text, font);
+  if (i >= 0) return s_face.hours[i].feels_deg;
+  return s_face.current_feels;
+}
+
+static int next_sun_index(time_t now) {
+  if (!s_face.ok || s_face.sun_count == 0) return -1;
+  uint32_t now32 = (uint32_t)now;
+  int i;
+  for (i = 0; i < s_face.sun_count; i++) {
+    if ((s_face.sun_events[i] & ~1u) >= now32) return i;
   }
-  int x = LAYOUT.windnow.x + (LAYOUT.windnow.w - arrow_w - size.w) / 2;
-  if (arrow) {
-    draw_barb(ctx, x + 5, LAYOUT.windnow.y + LAYOUT.windnow.h / 2 + 1, hour.wind_dir,
-              hour_knots(&hour), t->muted);
-  }
-  draw_text(ctx, text, font,
-            GRect(x + arrow_w, LAYOUT.windnow.y - 1, size.w + 2, LAYOUT.windnow.h + 2),
-            GTextAlignmentLeft, t->muted);
+  return -1;
 }
 
 static int read_steps(time_t now) {
@@ -1470,19 +1566,150 @@ static int read_steps(time_t now) {
   return steps >= 0 ? (int)steps : -1;
 }
 
-static void draw_steps(GContext *ctx, const Theme *t, time_t now) {
+static void draw_slot_updated(GContext *ctx, const Theme *t, Rect box) {
+  char text[8];
+  const char *shown = "--:--";
+  GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_14);
+  if (s_face.ok && s_face.fetched_at > 0) {
+    format_clock(text, sizeof(text), (time_t)s_face.fetched_at);
+    shown = text;
+  }
+  GSize size = text_size(shown, font);
+  int mark_w = 8;
+  int gap = 3;
+  int left = box.x + (box.w - mark_w - gap - size.w) / 2;
+  int cy = box.y + box.h / 2;
+  draw_pixel_mark(ctx, UPDATED_MARK, (int)ARRAY_LENGTH(UPDATED_MARK), left - 1, cy - 4, t->muted);
+  draw_text(ctx, shown, font,
+            GRect(left + mark_w + gap, box.y - 1, size.w + 2, box.h + 2),
+            GTextAlignmentLeft, t->muted);
+}
+
+static void draw_slot_wind(GContext *ctx, const Theme *t, Rect box, time_t now) {
+  int i = hour_now(now);
+  if (i < 0) return;
+  FaceHour hour = s_face.hours[i];
+  if (hour.wind_speed == FACE_NO_SPEED) return;
+  GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_14);
+  char text[16];
+  snprintf(text, sizeof(text), "%d %s", hour.wind_speed, s_face.metric ? "km/h" : "mph");
+  bool arrow = hour.wind_dir != FACE_NO_DIR;
+  int arrow_w = arrow ? 14 : 0;
+  GSize size = text_size(text, font);
+  if (arrow_w + size.w > box.w - 6) {
+    snprintf(text, sizeof(text), "%d", hour.wind_speed);
+    size = text_size(text, font);
+  }
+  int x = box.x + (box.w - arrow_w - size.w) / 2;
+  if (arrow) {
+    draw_barb(ctx, x + 5, box.y + box.h / 2 + 1, hour.wind_dir, hour_knots(&hour), t->muted);
+  }
+  draw_text(ctx, text, font,
+            GRect(x + arrow_w, box.y - 1, size.w + 2, box.h + 2),
+            GTextAlignmentLeft, t->muted);
+}
+
+static void draw_slot_steps(GContext *ctx, const Theme *t, Rect box, time_t now) {
   if (s_last_steps == -2) s_last_steps = read_steps(now);
   if (s_last_steps < 0) return;
   char number[16];
   char text[24];
   format_grouped(number, s_last_steps);
   GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_14);
-  // Say what the number is when there is room for it.
   snprintf(text, sizeof(text), "%s steps", number);
-  if (text_size(text, font).w > LAYOUT.steps.w) snprintf(text, sizeof(text), "%s", number);
-  draw_fitted(ctx, text, font,
-              GRect(LAYOUT.steps.x, LAYOUT.steps.y, LAYOUT.steps.w, LAYOUT.steps.h),
-              GTextAlignmentCenter, t->muted);
+  if (text_size(text, font).w > box.w) snprintf(text, sizeof(text), "%s", number);
+  draw_fitted(ctx, text, font, GRect(box.x, box.y, box.w, box.h), GTextAlignmentCenter, t->muted);
+}
+
+static void draw_slot_feels(GContext *ctx, const Theme *t, Rect box, time_t now) {
+  int deg = feels_now(now);
+  if (deg == FACE_NO_FEELS) return;
+  GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_14);
+  char text[16];
+  snprintf(text, sizeof(text), "FL %d\xc2\xb0", deg);
+  if (text_size(text, font).w > box.w) snprintf(text, sizeof(text), "%d\xc2\xb0", deg);
+  draw_fitted(ctx, text, font, GRect(box.x, box.y, box.w, box.h), GTextAlignmentCenter, t->muted);
+}
+
+static void draw_slot_humidity(GContext *ctx, const Theme *t, Rect box, time_t now) {
+  int i = hour_now(now);
+  if (i < 0) return;
+  uint8_t hum = s_face.hours[i].humidity;
+  if (hum == FACE_NO_HUMIDITY) return;
+  GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_14);
+  char text[8];
+  snprintf(text, sizeof(text), "%u%%", (unsigned)hum);
+  GSize size = text_size(text, font);
+  int mark_w = 5;
+  int gap = 3;
+  int left = box.x + (box.w - mark_w - gap - size.w) / 2;
+  int cy = box.y + box.h / 2;
+  draw_pixel_mark(ctx, DROP_MARK, (int)ARRAY_LENGTH(DROP_MARK), left, cy - 3, t->muted);
+  draw_text(ctx, text, font,
+            GRect(left + mark_w + gap, box.y - 1, size.w + 2, box.h + 2),
+            GTextAlignmentLeft, t->muted);
+}
+
+static void draw_slot_uv(GContext *ctx, const Theme *t, Rect box, time_t now) {
+  int i = hour_now(now);
+  if (i < 0) return;
+  uint8_t uv = s_face.hours[i].uv;
+  if (uv == FACE_NO_UV) return;
+  GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_14);
+  char text[10];
+  snprintf(text, sizeof(text), "UV %u", (unsigned)uv);
+  draw_fitted(ctx, text, font, GRect(box.x, box.y, box.w, box.h), GTextAlignmentCenter, t->muted);
+}
+
+static void draw_slot_sun(GContext *ctx, const Theme *t, Rect box, time_t now) {
+  int idx = next_sun_index(now);
+  if (idx < 0) return;
+  uint32_t ev = s_face.sun_events[idx];
+  bool is_rise = (ev & 1u) != 0;
+  char text[8];
+  format_clock(text, sizeof(text), (time_t)(ev & ~1u));
+  GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_14);
+  GSize size = text_size(text, font);
+  int mark_w = 7;
+  int gap = 3;
+  int left = box.x + (box.w - mark_w - gap - size.w) / 2;
+  int cy = box.y + box.h / 2;
+  if (is_rise) {
+    draw_pixel_mark(ctx, SUNRISE_MARK, (int)ARRAY_LENGTH(SUNRISE_MARK), left, cy - 3, t->muted);
+  } else {
+    draw_pixel_mark(ctx, SUNSET_MARK, (int)ARRAY_LENGTH(SUNSET_MARK), left, cy - 3, t->muted);
+  }
+  draw_text(ctx, text, font,
+            GRect(left + mark_w + gap, box.y - 1, size.w + 2, box.h + 2),
+            GTextAlignmentLeft, t->muted);
+}
+
+static void draw_top_slot(GContext *ctx, const Theme *t, Rect box, uint8_t slot, time_t now) {
+  switch (slot) {
+    case SLOT_WIND:
+      draw_slot_wind(ctx, t, box, now);
+      break;
+    case SLOT_UPDATED:
+      draw_slot_updated(ctx, t, box);
+      break;
+    case SLOT_STEPS:
+      draw_slot_steps(ctx, t, box, now);
+      break;
+    case SLOT_FEELS:
+      draw_slot_feels(ctx, t, box, now);
+      break;
+    case SLOT_HUMIDITY:
+      draw_slot_humidity(ctx, t, box, now);
+      break;
+    case SLOT_UV:
+      draw_slot_uv(ctx, t, box, now);
+      break;
+    case SLOT_SUN:
+      draw_slot_sun(ctx, t, box, now);
+      break;
+    default:
+      break;
+  }
 }
 
 #define BATTERY_W 17
@@ -1517,12 +1744,10 @@ static void draw_battery(GContext *ctx, const Theme *t) {
 }
 
 // Nothing shows while the phone is connected; a red Bluetooth rune shows when it is not.
-static void draw_bluetooth(GContext *ctx) {
+static void draw_bluetooth_at(GContext *ctx, int x, int y) {
   bool connected = bluetooth_connection_service_peek();
   s_last_bt = connected ? 1 : 0;
   if (connected) return;
-  int x = LAYOUT.bt_x;
-  int y = LAYOUT.bt_y;
   int h = LAYOUT.bt_r + 2;
   graphics_context_set_antialiased(ctx, false);
   graphics_context_set_stroke_width(ctx, 1);
@@ -1544,6 +1769,24 @@ bool face_needs_refresh(time_t now, uint32_t grace_sec) {
   return age < -600 || age >= interval;
 }
 
+static bool slot_needs_tick(uint8_t slot, bool hour_changed, bool feels_changed, bool sun_changed,
+                            bool steps_changed) {
+  switch (slot) {
+    case SLOT_STEPS:
+      return steps_changed;
+    case SLOT_WIND:
+    case SLOT_HUMIDITY:
+    case SLOT_UV:
+      return hour_changed;
+    case SLOT_FEELS:
+      return feels_changed;
+    case SLOT_SUN:
+      return sun_changed;
+    default:
+      return false;
+  }
+}
+
 uint8_t face_tick_dirty(time_t now, TimeUnits units_changed) {
   uint8_t mask = FACE_DIRTY_TIME;
   bool h24 = clock_is_24h_style();
@@ -1555,6 +1798,9 @@ uint8_t face_tick_dirty(time_t now, TimeUnits units_changed) {
     s_health_checked = false;
     mask |= FACE_DIRTY_META;
   }
+  bool hour_changed = false;
+  bool feels_changed = false;
+  bool sun_changed = false;
   if (s_face.ok) {
     int px = now_px(now);
     bool stale = false;
@@ -1563,14 +1809,23 @@ uint8_t face_tick_dirty(time_t now, TimeUnits units_changed) {
       mask |= FACE_DIRTY_CHART;
       if ((px < 0) != (s_last_now_px < 0)) mask |= FACE_DIRTY_META;
     }
-    if (!s_show_updated && hour_now(now) != s_last_hour_now) {
-      mask |= FACE_DIRTY_TOP_CENTER;
+    hour_changed = hour_now(now) != s_last_hour_now;
+    feels_changed = feels_now(now) != s_last_feels_now;
+    sun_changed = next_sun_index(now) != s_last_sun_idx;
+  }
+  bool steps_changed = false;
+  if (s_top_left == SLOT_STEPS || s_top_center == SLOT_STEPS) {
+    int steps = read_steps(now);
+    if (steps != s_last_steps) {
+      s_last_steps = steps;
+      steps_changed = true;
     }
   }
-  int steps = read_steps(now);
-  if (steps != s_last_steps) {
-    s_last_steps = steps;
+  if (slot_needs_tick(s_top_left, hour_changed, feels_changed, sun_changed, steps_changed)) {
     mask |= FACE_DIRTY_STEPS;
+  }
+  if (slot_needs_tick(s_top_center, hour_changed, feels_changed, sun_changed, steps_changed)) {
+    mask |= FACE_DIRTY_TOP_CENTER;
   }
   return mask;
 }
@@ -1593,19 +1848,56 @@ void face_mark_dirty(uint8_t mask) {
   s_dirty |= mask;
 }
 
+static void draw_quick_view(GContext *ctx, const Theme *t, GRect area, struct tm *local,
+                            time_t now) {
+  fill_rect(ctx, area.origin.x, area.origin.y, area.size.w, area.size.h, t->bg);
+  draw_top_slot(ctx, t, LAYOUT.steps, s_top_left, now);
+  draw_top_slot(ctx, t, LAYOUT.windnow, s_top_center, now);
+  draw_battery(ctx, t);
+  int top_y = LAYOUT.battery.y + LAYOUT.battery.h + 4;
+  int avail_h = (area.origin.y + area.size.h) - top_y;
+  int block_h = LAYOUT.time.h + 4 + LAYOUT.meta.h;
+  int time_y = top_y + (avail_h - block_h) / 2;
+  if (time_y < top_y) time_y = top_y;
+  int meta_y = time_y + LAYOUT.time.h + 4;
+  draw_time_at(ctx, t, local, time_y);
+  if (meta_y + LAYOUT.meta.h <= area.origin.y + area.size.h + 2) {
+    draw_meta_at(ctx, t, local, now, meta_y, true);
+  }
+#if defined(PBL_ROUND)
+  draw_bluetooth_at(ctx, LAYOUT.bt_x, LAYOUT.bt_y);
+#else
+  draw_bluetooth_at(ctx, LAYOUT.bt_x, time_y + LAYOUT.time.h / 2);
+#endif
+}
+
 void face_paint(Layer *layer, GContext *ctx) {
   Theme t = theme();
   GRect bounds = layer_get_bounds(layer);
+  GRect unobstructed = layer_get_unobstructed_bounds(layer);
+  bool qv = unobstructed.size.h < bounds.size.h;
   uint8_t dirty = s_dirty;
   s_dirty = 0;
-  // If PebbleOS triggered a repaint directly (e.g. after a modal or screenshot), repaint all.
-  bool full = (dirty == 0 || dirty == FACE_DIRTY_ALL);
+  time_t now = time(NULL);
+  struct tm local = *localtime(&now);
+
+  if (qv) {
+    s_quick_view = true;
+    draw_quick_view(ctx, &t, unobstructed, &local, now);
+    s_last_hour_now = hour_now(now);
+    s_last_feels_now = feels_now(now);
+    s_last_sun_idx = next_sun_index(now);
+    s_last_24h = clock_is_24h_style();
+    return;
+  }
+
+  // If PebbleOS triggered a repaint directly, Quick View just closed, or all was marked dirty.
+  bool full = (dirty == 0 || dirty == FACE_DIRTY_ALL || s_quick_view);
+  s_quick_view = false;
   if (full) {
     dirty = FACE_DIRTY_ALL;
     fill_rect(ctx, bounds.origin.x, bounds.origin.y, bounds.size.w, bounds.size.h, t.bg);
   }
-  time_t now = time(NULL);
-  struct tm local = *localtime(&now);
   if (dirty & FACE_DIRTY_CHART) {
     if (s_face.ok) {
       draw_chart(ctx, &t, now, full);
@@ -1618,17 +1910,17 @@ void face_paint(Layer *layer, GContext *ctx) {
   }
   if (dirty & FACE_DIRTY_TIME) {
     if (!full) fill_rect(ctx, TIME_CLEAR_X, TIME_CLEAR_Y, TIME_CLEAR_W, TIME_CLEAR_H, t.bg);
-    draw_time(ctx, &t, &local);
+    draw_time_at(ctx, &t, &local, LAYOUT.time.y);
   }
   if (dirty & FACE_DIRTY_META) {
     if (!full) fill_rect(ctx, LAYOUT.meta.x, LAYOUT.meta.y, LAYOUT.meta.w, LAYOUT.meta.h, t.bg);
-    draw_meta(ctx, &t, &local, now);
+    draw_meta_at(ctx, &t, &local, now, LAYOUT.meta.y, false);
   }
   if (dirty & FACE_DIRTY_STEPS) {
     if (!full) {
       fill_rect(ctx, LAYOUT.steps.x, LAYOUT.steps.y - 1, LAYOUT.steps.w, LAYOUT.steps.h + 2, t.bg);
     }
-    draw_steps(ctx, &t, now);
+    draw_top_slot(ctx, &t, LAYOUT.steps, s_top_left, now);
   }
   if (dirty & FACE_DIRTY_BATTERY) {
     if (!full) {
@@ -1642,14 +1934,17 @@ void face_paint(Layer *layer, GContext *ctx) {
       fill_rect(ctx, LAYOUT.windnow.x, LAYOUT.windnow.y - 1, LAYOUT.windnow.w, LAYOUT.windnow.h + 2,
                 t.bg);
     }
-    if (s_show_updated) draw_updated(ctx, &t);
-    else draw_wind_now(ctx, &t, now);
+    draw_top_slot(ctx, &t, LAYOUT.windnow, s_top_center, now);
+  }
+  if (dirty & (FACE_DIRTY_STEPS | FACE_DIRTY_TOP_CENTER)) {
     s_last_hour_now = hour_now(now);
+    s_last_feels_now = feels_now(now);
+    s_last_sun_idx = next_sun_index(now);
   }
   if (dirty & FACE_DIRTY_BT) {
     int h = LAYOUT.bt_r + 2;
     if (!full) fill_rect(ctx, LAYOUT.bt_x - h, LAYOUT.bt_y - h, 2 * h + 1, 2 * h + 1, t.bg);
-    draw_bluetooth(ctx);
+    draw_bluetooth_at(ctx, LAYOUT.bt_x, LAYOUT.bt_y);
   }
   s_last_24h = clock_is_24h_style();
 }

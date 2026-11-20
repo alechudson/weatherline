@@ -1,20 +1,56 @@
 var forecast = require('./forecast');
 
-// Version 2 adds yesterday's row to each hour; version 3 adds wind to each hour, and
-// each hour's temperature and wind speed in the chosen units so the watch can show the
-// current hour on its own when the phone has not refreshed; version 4 bit-packs hourly
-// fields from 10 bytes to 7 and carries the refresh interval in header byte 23.
-var VERSION = 4;
-var HOUR_BYTES = 7;
+// Version 4 bit-packed hourly fields and carried refreshMin; version 5 adds the freezing
+// line row, configurable top-left and top-center slots, Bluetooth disconnect alert flag,
+// feels-like temperature mode/values, hourly humidity and UV, and sunrise/sunset events.
+var VERSION = 5;
+var HEADER_BYTES = 44;
+var HOUR_BYTES = 9;
+var NO_ROW = 127;
 var NO_SPEED = 255;
-var DAY_BYTES = 8;
 var NO_DIR = 15;
+var NO_FEELS = -128;
+var NO_HUMIDITY = 255;
+var NO_UV = 15;
+var NO_FREEZE = 255;
+var DAY_BYTES = 8;
+var MAX_SUNS = 8;
 // The wind lane is full at this speed.
 var WIND_FULL_KMH = 50;
 var LIGHT_FLAG = 0x10;
 var MONO_FLAG = 0x20;
-// The top line shows the last successful fetch instead of the wind speed.
-var UPDATED_FLAG = 0x40;
+var BT_ALERT_FLAG = 0x40;
+var FEELS_CHART_FLAG = 0x80;
+
+var SLOT_NAMES = ['wind', 'updated', 'steps', 'feels', 'humidity', 'uv', 'sun', 'off'];
+var SLOT_CODES = {
+  wind: 0,
+  updated: 1,
+  steps: 2,
+  feels: 3,
+  humidity: 4,
+  uv: 5,
+  sun: 6,
+  off: 7
+};
+
+function slotCode(name, fallback) {
+  if (typeof name === 'string' && Object.prototype.hasOwnProperty.call(SLOT_CODES, name)) {
+    return SLOT_CODES[name];
+  }
+  return fallback;
+}
+
+function slotName(code, fallback) {
+  return code >= 0 && code < SLOT_NAMES.length ? SLOT_NAMES[code] : fallback;
+}
+
+function packPrefs(st) {
+  var center = slotCode(st && st.topLine, SLOT_CODES.wind);
+  var left = slotCode(st && st.topLeft, SLOT_CODES.steps);
+  var bt = st && st.btAlert ? 0x100 : 0;
+  return (center & 0x0F) | ((left & 0x0F) << 4) | bt;
+}
 
 // Both watches use the same centered stack, with the time near the bottom: steps, the current
 // wind and battery along the top, a sky lane, the chart (which carries the current
@@ -104,6 +140,43 @@ function speedByte(kmh, unit) {
 
 function degByte(celsius, unit) {
   return Math.max(-127, Math.min(127, whole(celsius, unit)));
+}
+
+function feelsByte(celsius, unit) {
+  if (!isNum(celsius)) return NO_FEELS;
+  return degByte(celsius, unit);
+}
+
+function humidityByte(pct) {
+  if (!isNum(pct)) return NO_HUMIDITY;
+  return Math.max(0, Math.min(100, Math.round(pct)));
+}
+
+function uvNibble(uv) {
+  if (!isNum(uv) || uv < 0) return NO_UV;
+  return Math.min(14, Math.round(uv));
+}
+
+function plotTempC(hour, useFeels) {
+  if (useFeels && isNum(hour.apparentC)) return hour.apparentC;
+  return hour.tempC;
+}
+
+function collectSunEvents(days, nowUnix) {
+  var events = [];
+  var i;
+  for (i = 0; i < days.length; i++) {
+    if (isNum(days[i].sunrise)) events.push({time: days[i].sunrise, sunrise: true});
+    if (isNum(days[i].sunset)) events.push({time: days[i].sunset, sunrise: false});
+  }
+  events.sort(function(a, b) { return a.time - b.time; });
+  var out = [];
+  for (i = 0; i < events.length && out.length < MAX_SUNS; i++) {
+    if (events[i].time >= nowUnix - 3600) {
+      out.push(((events[i].time >>> 0) & 0xFFFFFFFE) | (events[i].sunrise ? 1 : 0));
+    }
+  }
+  return out;
 }
 
 // Direction the wind comes from, snapped to 8 compass octants (0=N..7=NW) or NO_DIR.
@@ -303,6 +376,7 @@ function buildFrame(forecastValue, settings, platform, nowUnix) {
   if (!hoursIn || !hoursIn.length) return null;
   var daysCount = settings.days;
   var unit = settings.unit;
+  var useFeels = settings.tempMode === 'feels';
   var offset = forecastValue.utcOffsetSeconds;
   var ordered = hoursIn.slice().sort(function(a, b) { return a.time - b.time; });
   var selected = selectHours(ordered, offset, daysCount, nowUnix);
@@ -316,11 +390,11 @@ function buildFrame(forecastValue, settings, platform, nowUnix) {
   var prev = [];
   for (i = 0; i < selected.length; i++) prev.push(byTime[selected[i].time - 86400] || null);
 
-  var lo = tenths(selected[0].tempC, unit);
+  var lo = tenths(plotTempC(selected[0], useFeels), unit);
   var hi = lo;
   for (i = 0; i < selected.length; i++) {
-    var samples = [selected[i].tempC];
-    if (prev[i]) samples.push(prev[i].tempC);
+    var samples = [plotTempC(selected[i], useFeels)];
+    if (prev[i]) samples.push(plotTempC(prev[i], useFeels));
     var k;
     for (k = 0; k < samples.length; k++) {
       var sample = tenths(samples[k], unit);
@@ -336,21 +410,29 @@ function buildFrame(forecastValue, settings, platform, nowUnix) {
   var plotH = layout.plot.h;
   var plotW = layout.plot.w;
   var laneH = layout.precip.h;
+  var freezeTenths = unit === 'C' ? 0 : 320;
+  var freezeY = (lo <= freezeTenths && freezeTenths <= hi)
+    ? tempY(freezeTenths, lo, hi, plotH, layout.inset || 0)
+    : NO_FREEZE;
   var n = selected.length;
   var hourRecs = [];
   for (i = 0; i < n; i++) {
     var hour = selected[i];
+    var hTemp = plotTempC(hour, useFeels);
     hourRecs.push({
-      tempY: tempY(tenths(hour.tempC, unit), lo, hi, plotH, layout.inset || 0),
-      prevY: prev[i] ? tempY(tenths(prev[i].tempC, unit), lo, hi, plotH, layout.inset || 0) : 255,
+      tempY: tempY(tenths(hTemp, unit), lo, hi, plotH, layout.inset || 0),
+      prevY: prev[i] ? tempY(tenths(plotTempC(prev[i], useFeels), unit), lo, hi, plotH, layout.inset || 0) : NO_ROW,
       night: hour.isDay === 1 ? 0 : 1,
       rainH: barPx(hour.rainMm, 4, 0.1, laneH),
       snowH: barPx(hour.snowCm, 1, 0.05, laneH),
       cloudH: Math.round(hour.cloud / 100 * layout.cloud.h),
       windH: windPx(hour.windKmh, layout.wind.h),
       windDir: dirOctant(hour.windDir),
-      deg: degByte(hour.tempC, unit),
-      windSpeed: speedByte(hour.windKmh, unit)
+      deg: degByte(hTemp, unit),
+      feelsDeg: feelsByte(hour.apparentC, unit),
+      windSpeed: speedByte(hour.windKmh, unit),
+      humidity: humidityByte(hour.humidity),
+      uv: uvNibble(hour.uv)
     });
   }
 
@@ -362,19 +444,20 @@ function buildFrame(forecastValue, settings, platform, nowUnix) {
     var group = groups[g];
     var x = Math.floor(group.i0 * plotW / n);
     var span = Math.floor(group.i1 * plotW / n) - x;
-    var match = matchingDay(daily, group.midnight, offset);
+    var match = useFeels ? null : matchingDay(daily, group.midnight, offset);
     var maxC;
     var minC;
     if (match) {
       maxC = match.maxC;
       minC = match.minC;
     } else {
-      maxC = group.hours[0].tempC;
+      maxC = plotTempC(group.hours[0], useFeels);
       minC = maxC;
       var h;
       for (h = 1; h < group.hours.length; h++) {
-        if (group.hours[h].tempC > maxC) maxC = group.hours[h].tempC;
-        if (group.hours[h].tempC < minC) minC = group.hours[h].tempC;
+        var ht = plotTempC(group.hours[h], useFeels);
+        if (ht > maxC) maxC = ht;
+        if (ht < minC) minC = ht;
       }
     }
     var shifted = new Date((group.midnight + offset) * 1000);
@@ -389,23 +472,32 @@ function buildFrame(forecastValue, settings, platform, nowUnix) {
   }
 
   var currentDeg = -32768;
-  if (isNum(forecastValue.currentC)) {
-    currentDeg = whole(forecastValue.currentC, unit);
+  var activeCurrentC = useFeels && isNum(forecastValue.currentApparentC)
+    ? forecastValue.currentApparentC : forecastValue.currentC;
+  if (isNum(activeCurrentC)) {
+    currentDeg = whole(activeCurrentC, unit);
   } else if (selected.length) {
-    currentDeg = whole(nearestHour(selected, nowUnix).tempC, unit);
+    currentDeg = whole(plotTempC(nearestHour(selected, nowUnix), useFeels), unit);
+  }
+  var currentFeels = NO_FEELS;
+  if (isNum(forecastValue.currentApparentC)) {
+    currentFeels = degByte(forecastValue.currentApparentC, unit);
+  } else if (selected.length) {
+    currentFeels = feelsByte(nearestHour(selected, nowUnix).apparentC, unit);
   }
 
+  var sunEvents = collectSunEvents(daily, nowUnix);
   var place = forecast.clipPlace(forecastValue.place || '');
-  var size = 40 + n * HOUR_BYTES + dayRecs.length * DAY_BYTES;
+  var size = HEADER_BYTES + n * HOUR_BYTES + dayRecs.length * DAY_BYTES + sunEvents.length * 4;
   var bytes = new Uint8Array(size);
   var o = 0;
   o = putU8(bytes, o, VERSION);
   o = putU8(bytes, o, platform === 'gabbro' ? 2 : 1);
-  // Low bits: 1 for F, 2 for C. LIGHT_FLAG or MONO_FLAG asks the watch for that theme.
-  // UPDATED_FLAG asks for the last-fetch time on the top line instead of the wind.
+  // Low bits: 1 for F, 2 for C. High bits: theme, Bluetooth disconnect alert, feels-like line.
   var themeFlag = settings.theme === 'light' ? LIGHT_FLAG : (settings.theme === 'mono' ? MONO_FLAG : 0);
-  var topFlag = settings.topLine === 'updated' ? UPDATED_FLAG : 0;
-  o = putU8(bytes, o, (unit === 'C' ? 2 : 1) | themeFlag | topFlag);
+  var btFlag = settings.btAlert ? BT_ALERT_FLAG : 0;
+  var feelsFlag = useFeels ? FEELS_CHART_FLAG : 0;
+  o = putU8(bytes, o, (unit === 'C' ? 2 : 1) | themeFlag | btFlag | feelsFlag);
   o = putU8(bytes, o, n);
   o = putU32(bytes, o, forecastValue.fetchedAt || 0);
   o = putU32(bytes, o, selected[0].time);
@@ -420,16 +512,25 @@ function buildFrame(forecastValue, settings, platform, nowUnix) {
   o = putU8(bytes, o, refreshMin);
   putUtf8(bytes, o, place, 15);
   o += 16;
+  o = putU8(bytes, o, freezeY);
+  var centerSlot = slotCode(settings.topLine, SLOT_CODES.wind);
+  var leftSlot = slotCode(settings.topLeft, SLOT_CODES.steps);
+  o = putU8(bytes, o, (centerSlot & 0x0F) | ((leftSlot & 0x0F) << 4));
+  o = putU8(bytes, o, sunEvents.length);
+  o = putU8(bytes, o, currentFeels);
 
   for (i = 0; i < hourRecs.length; i++) {
     var rec = hourRecs[i];
-    o = putU8(bytes, o, rec.tempY);
-    o = putU8(bytes, o, rec.prevY);
+    var uv = rec.uv & 0x0F;
+    o = putU8(bytes, o, (rec.tempY & 0x7F) | (((uv >> 2) & 1) << 7));
+    o = putU8(bytes, o, (rec.prevY & 0x7F) | (((uv >> 3) & 1) << 7));
     o = putU8(bytes, o, rec.deg);
     o = putU8(bytes, o, rec.windSpeed);
     o = putU8(bytes, o, (rec.rainH & 0x0F) | ((rec.snowH & 0x0F) << 4));
-    o = putU8(bytes, o, (rec.cloudH & 0x1F) | ((rec.night ? 1 : 0) << 5));
+    o = putU8(bytes, o, (rec.cloudH & 0x1F) | ((rec.night ? 1 : 0) << 5) | ((uv & 0x03) << 6));
     o = putU8(bytes, o, (rec.windH & 0x0F) | ((rec.windDir & 0x0F) << 4));
+    o = putU8(bytes, o, rec.feelsDeg);
+    o = putU8(bytes, o, rec.humidity);
   }
   for (g = 0; g < dayRecs.length; g++) {
     var day = dayRecs[g];
@@ -440,28 +541,39 @@ function buildFrame(forecastValue, settings, platform, nowUnix) {
     o = putU8(bytes, o, day.wday);
     o = putU8(bytes, o, day.mday);
   }
+  var s;
+  for (s = 0; s < sunEvents.length; s++) {
+    o = putU32(bytes, o, sunEvents[s]);
+  }
   return bytes;
 }
 
 function unpackFrame(bytes) {
-  if (!bytes || bytes.length < 40) return null;
+  if (!bytes || bytes.length < HEADER_BYTES) return null;
   if (bytes[0] !== VERSION) return null;
   var hourCount = bytes[3];
   var dayCount = bytes[22];
   var refreshMin = bytes[23] || 60;
-  var expect = 40 + hourCount * HOUR_BYTES + dayCount * DAY_BYTES;
+  var freezeY = bytes[40];
+  var slotsByte = bytes[41];
+  var sunCount = bytes[42];
+  var currentFeels = bytes[43] > 127 ? bytes[43] - 256 : bytes[43];
+  var expect = HEADER_BYTES + hourCount * HOUR_BYTES + dayCount * DAY_BYTES + sunCount * 4;
   if (bytes.length !== expect) return null;
 
   var hours = [];
-  var o = 40;
+  var o = HEADER_BYTES;
   var i;
   for (i = 0; i < hourCount; i++) {
+    var b0 = bytes[o];
+    var b1 = bytes[o + 1];
     var precip = bytes[o + 4];
     var sky = bytes[o + 5];
     var wind = bytes[o + 6];
+    var uv = ((sky >> 6) & 3) | (((b0 >> 7) & 1) << 2) | (((b1 >> 7) & 1) << 3);
     hours.push({
-      tempY: bytes[o],
-      prevY: bytes[o + 1],
+      tempY: b0 & 0x7F,
+      prevY: b1 & 0x7F,
       deg: bytes[o + 2] > 127 ? bytes[o + 2] - 256 : bytes[o + 2],
       windSpeed: bytes[o + 3],
       rainH: precip & 0x0F,
@@ -469,7 +581,10 @@ function unpackFrame(bytes) {
       cloudH: sky & 0x1F,
       night: (sky >> 5) & 1,
       windH: wind & 0x0F,
-      windDir: (wind >> 4) & 0x0F
+      windDir: (wind >> 4) & 0x0F,
+      feelsDeg: bytes[o + 7] > 127 ? bytes[o + 7] - 256 : bytes[o + 7],
+      humidity: bytes[o + 8],
+      uv: uv
     });
     o += HOUR_BYTES;
   }
@@ -486,6 +601,13 @@ function unpackFrame(bytes) {
     });
     o += DAY_BYTES;
   }
+  var sunEvents = [];
+  var s;
+  for (s = 0; s < sunCount; s++) {
+    var raw = readU32(bytes, o);
+    sunEvents.push({time: raw & 0xFFFFFFFE, sunrise: (raw & 1) === 1});
+    o += 4;
+  }
 
   var unitByte = bytes[2];
   return {
@@ -493,24 +615,33 @@ function unpackFrame(bytes) {
     platform: bytes[1] === 2 ? 'gabbro' : 'emery',
     unit: (unitByte & 15) === 2 ? 'C' : 'F',
     theme: unitByte & LIGHT_FLAG ? 'light' : (unitByte & MONO_FLAG ? 'mono' : 'dark'),
-    topLine: unitByte & UPDATED_FLAG ? 'updated' : 'wind',
+    btAlert: (unitByte & BT_ALERT_FLAG) !== 0,
+    tempMode: (unitByte & FEELS_CHART_FLAG) !== 0 ? 'feels' : 'actual',
+    topLine: slotName(slotsByte & 0x0F, 'wind'),
+    topLeft: slotName((slotsByte >> 4) & 0x0F, 'steps'),
     hourCount: hourCount,
     fetchedAt: readU32(bytes, 4),
     windowStart: readU32(bytes, 8),
     windowEnd: readU32(bytes, 12),
     utcOffset: readI32(bytes, 16),
     currentDeg: readI16(bytes, 20),
+    currentFeels: currentFeels,
     dayCount: dayCount,
     refreshMin: refreshMin,
+    freezeY: freezeY,
+    sunCount: sunCount,
     place: decodeUtf8(bytes, 24, 16),
     hours: hours,
-    days: days
+    days: days,
+    sunEvents: sunEvents
   };
 }
 
 module.exports = {
   version: VERSION,
   layouts: LAYOUTS,
+  slotCode: slotCode,
+  packPrefs: packPrefs,
   columnBox: columnBox,
   buildFrame: buildFrame,
   unpackFrame: unpackFrame
