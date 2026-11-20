@@ -35,8 +35,9 @@ var LAYOUTS = {
     inset: 14
   },
   gabbro: {
-    // The center slot is wide enough for "Upd 06:10". Steps give up a little width; their
-    // text already drops the word when the number does not fit, and the battery keeps its.
+    // The center slot matches Time 2, wide enough for the refresh mark and "06:10". Steps
+    // give up a little width; their text already drops the word when the number does not
+    // fit, and the battery keeps its.
     steps: {x: 50, y: 36, w: 48, h: 16},
     windnow: {x: 98, y: 36, w: 60, h: 16},
     battery: {x: 158, y: 36, w: 52, h: 16},

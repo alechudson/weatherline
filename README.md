@@ -70,7 +70,7 @@ Open the config page from the Pebble phone app. There are five settings.
 - The temperature unit is °F or °C. The default is °F.
 - Refresh is every 30 minutes, 45 minutes, or 1 hour. The default is 1 hour.
 - The theme is Dark, Light or Mono. The default is Dark. Mono uses only black, white and grays: warmer than yesterday is a bright checker, colder is gray horizontal lines, and night is a light bar under the chart instead of a band behind it. The low-battery and Bluetooth warnings stay red.
-- The top line is Wind speed or Last updated. The default is Wind speed. Last updated shows the local time of the last successful fetch, following the watch's 12- or 24-hour setting, as in `Upd 11:42`. It is kept on the watch, so it is still there after the app restarts. Before the first successful fetch it shows `--:--`, and it changes only when a fetch succeeds, so a time that does not move means fetches are failing.
+- The top line is Wind speed or Last updated. The default is Wind speed. Last updated shows a small refresh mark and the local time of the last successful fetch, following the watch's 12- or 24-hour setting, as in the mark beside `11:42`. It is kept on the watch, so it is still there after the app restarts. Before the first successful fetch the time is `--:--`, mark and all, and it changes only when a fetch succeeds, so a time that does not move means fetches are failing.
 
 Changing the day count, the unit, the theme, or the top line redraws the forecast already stored on the phone. It does not download again, and the watch applies it without a restart.
 

@@ -1158,31 +1158,58 @@ static void format_grouped(char *out, int value) {
   }
 }
 
-// Local time of the last successful fetch, as "Upd 11:42", following the watch's 12/24-hour
-// setting. The stamp is the frame's fetched_at, which is stored with the forecast, so it is
-// still there after a restart and does not move when a fetch fails. Before any success it is
-// "--:--". The prefix is dropped only when this slot is too narrow for it.
+// A clockwise refresh mark, arrowhead at the upper right. Whole pixels, like the battery and
+// the Bluetooth rune, so it stays sharp. The ink is centered on (4, 4).
+static const int8_t UPDATED_MARK[][2] = {
+  {3, 1}, {4, 1}, {5, 1},
+  {2, 2}, {6, 2}, {7, 2},
+  {1, 3}, {7, 3}, {8, 3},
+  {1, 4}, {8, 4},
+  {1, 5},
+  {2, 6}, {7, 6},
+  {3, 7}, {4, 7}, {5, 7}, {6, 7}
+};
+
+static void draw_updated_mark(GContext *ctx, int cx, int cy, GColor color) {
+  graphics_context_set_antialiased(ctx, false);
+  graphics_context_set_stroke_width(ctx, 1);
+  graphics_context_set_stroke_color(ctx, color);
+  int i;
+  for (i = 0; i < (int)ARRAY_LENGTH(UPDATED_MARK); i++) {
+    graphics_draw_pixel(ctx, GPoint(cx + UPDATED_MARK[i][0] - 4, cy + UPDATED_MARK[i][1] - 4));
+  }
+}
+
+// Local time of the last successful fetch: the refresh mark, then the clock, following the
+// watch's 12/24-hour setting. The stamp is the frame's fetched_at, which is stored with the
+// forecast, so it is still there after a restart and does not move when a fetch fails.
+// Before any success the time is "--:--", with the mark still beside it.
 static void draw_updated(GContext *ctx, const Theme *t) {
-  char clock[8];
-  char text[16];
+  char text[8];
   const char *shown = "--:--";
   GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_14);
   if (s_face.ok && s_face.fetched_at > 0) {
     time_t fetched = (time_t)s_face.fetched_at;
     struct tm when = *localtime(&fetched);
     if (clock_is_24h_style()) {
-      snprintf(clock, sizeof(clock), "%02d:%02d", when.tm_hour, when.tm_min);
+      snprintf(text, sizeof(text), "%02d:%02d", when.tm_hour, when.tm_min);
     } else {
       int hour = when.tm_hour % 12;
       if (hour == 0) hour = 12;
-      snprintf(clock, sizeof(clock), "%d:%02d", hour, when.tm_min);
+      snprintf(text, sizeof(text), "%d:%02d", hour, when.tm_min);
     }
-    snprintf(text, sizeof(text), "Upd %s", clock);
-    shown = text_size(text, font).w <= LAYOUT.windnow.w ? text : clock;
+    shown = text;
   }
   GSize size = text_size(shown, font);
-  int x = LAYOUT.windnow.x + (LAYOUT.windnow.w - size.w) / 2;
-  draw_text(ctx, shown, font, GRect(x, LAYOUT.windnow.y - 1, size.w + 2, LAYOUT.windnow.h + 2),
+  // The mark's ink is 8px wide. A short gap, about a space, sits between it and the digits.
+  int mark_w = 8;
+  int gap = 3;
+  int left = LAYOUT.windnow.x + (LAYOUT.windnow.w - mark_w - gap - size.w) / 2;
+  // Digit ink is centered on the middle of this slot. The mark is centered on the same row.
+  int cy = LAYOUT.windnow.y + LAYOUT.windnow.h / 2;
+  draw_updated_mark(ctx, left + 3, cy, t->muted);
+  draw_text(ctx, shown, font,
+            GRect(left + mark_w + gap, LAYOUT.windnow.y - 1, size.w + 2, LAYOUT.windnow.h + 2),
             GTextAlignmentLeft, t->muted);
 }
 
