@@ -68,7 +68,7 @@ function sameBytes(a, b) {
 }
 
 function queueSend(item) {
-  if (sameBytes(item.bytes, pending ? pending.bytes : lastSent)) return;
+  if (sameBytes(item.bytes, pending ? pending.bytes : lastSent)) return false;
   pending = item;
   attempts = 0;
   if (retryTimer) {
@@ -76,6 +76,7 @@ function queueSend(item) {
     retryTimer = null;
   }
   if (!inflight) sendPending();
+  return true;
 }
 
 function sendPending() {
@@ -115,17 +116,25 @@ function sendPending() {
 }
 
 function sendForecast(cached) {
-  if (!cached) return;
+  if (!cached) return false;
   var st = settings.readSettings(localStorage);
   var bytes = frame.buildFrame(cached, st, watchPlatform(), nowUnix());
-  if (!bytes) return;
+  if (!bytes) return false;
   var unpacked = frame.unpackFrame(bytes);
-  queueSend({
+  return queueSend({
     bytes: bytes,
     lat: cached.lat,
     lon: cached.lon,
     hours: unpacked ? unpacked.hourCount : 0
   });
+}
+
+// The top-line choice has to reach the watch even when there is no forecast to send with it.
+function sendTopLine() {
+  var st = settings.readSettings(localStorage);
+  var dict = {};
+  dict[messageKeys.TOPLINE] = st.topLine === 'updated' ? 1 : 0;
+  Pebble.sendAppMessage(dict, function() {}, function() {});
 }
 
 function skipFetch(cached, fix, st) {
@@ -296,7 +305,9 @@ Pebble.addEventListener('webviewclosed', function(e) {
   var stored = settings.applyConfig(localStorage, e && e.response);
   if (!stored) return;
   // Redraw the stored forecast with the new settings. A refresh in flight keeps going
-  // and re-arms the timer with the new interval when it ends.
-  sendForecast(forecast.readCache(localStorage));
+  // and re-arms the timer with the new interval when it ends. With no forecast yet, the
+  // top-line choice still goes to the watch on its own.
+  var cached = forecast.readCache(localStorage);
+  if (!sendForecast(cached) && !cached && !busy()) sendTopLine();
   if (!busy()) armRefresh();
 });

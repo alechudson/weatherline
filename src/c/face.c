@@ -11,6 +11,8 @@
 #define FACE_CHUNK 240
 #define FACE_LEN_KEY 1
 #define FACE_DATA_KEY 2
+// Frame chunks use keys from FACE_DATA_KEY upward. This sits clear of them.
+#define FACE_TOP_KEY 100
 #define FACE_NO_ROW 255
 #define FACE_NO_DIR 255
 #define FACE_NO_SPEED 255
@@ -20,6 +22,8 @@
 #define FACE_LIGHT_FLAG 0x10
 // And this one when the mono theme is chosen: black, white and grays only.
 #define FACE_MONO_FLAG 0x20
+// And this one when the top line shows the last successful fetch instead of the wind.
+#define FACE_UPDATED_FLAG 0x40
 
 #if defined(PBL_ROUND)
 #define FACE_PLATFORM 2
@@ -54,6 +58,7 @@ typedef struct {
   bool light;
   bool mono;
   bool metric;
+  bool top_updated;
   uint8_t hour_count;
   uint8_t day_count;
   uint32_t fetched_at;
@@ -95,6 +100,8 @@ typedef struct {
 
 static Face s_face;
 static Face s_scratch;
+// Kept apart from the frame so it survives before the first forecast, and a restart.
+static bool s_show_updated;
 // The frame as stored on the watch, so a repeat of it skips the flash write.
 static uint8_t s_blob[FACE_MAX_BYTES];
 static int s_blob_len = 0;
@@ -227,6 +234,7 @@ static bool unpack(Face *face, const uint8_t *data, int len) {
   face->light = (data[2] & FACE_LIGHT_FLAG) != 0;
   face->mono = !face->light && (data[2] & FACE_MONO_FLAG) != 0;
   face->metric = (data[2] & 0x0F) == 2;
+  face->top_updated = (data[2] & FACE_UPDATED_FLAG) != 0;
   face->hour_count = hour_count;
   face->day_count = day_count;
   face->fetched_at = read_u32(data + 4);
@@ -280,9 +288,22 @@ static void save_bytes(const uint8_t *data, int len) {
   persist_write_int(FACE_LEN_KEY, len);
 }
 
+// Writes the choice only when it changes. The default (wind, nothing stored) stays unwritten
+// so an upgrade does not touch the flash.
+static void apply_top(bool updated) {
+  bool known = persist_exists(FACE_TOP_KEY);
+  if ((!known && !updated) || (known && persist_read_bool(FACE_TOP_KEY) == updated)) {
+    s_show_updated = updated;
+    return;
+  }
+  s_show_updated = updated;
+  persist_write_bool(FACE_TOP_KEY, updated);
+}
+
 bool face_set_frame(const uint8_t *data, int len) {
   if (!unpack(&s_scratch, data, len)) return false;
   s_face = s_scratch;
+  apply_top(s_face.top_updated);
   if (len == s_blob_len && memcmp(data, s_blob, (size_t)len) == 0) return true;
   save_bytes(data, len);
   memcpy(s_blob, data, (size_t)len);
@@ -290,7 +311,12 @@ bool face_set_frame(const uint8_t *data, int len) {
   return true;
 }
 
+void face_set_top_line(bool updated) {
+  apply_top(updated);
+}
+
 void face_load(void) {
+  if (persist_exists(FACE_TOP_KEY)) s_show_updated = persist_read_bool(FACE_TOP_KEY);
   if (!persist_exists(FACE_LEN_KEY)) return;
   int len = persist_read_int(FACE_LEN_KEY);
   if (len <= 0 || len > FACE_MAX_BYTES) return;
@@ -307,6 +333,8 @@ void face_load(void) {
   if (!unpack(&s_scratch, s_blob, len)) return;
   s_face = s_scratch;
   s_blob_len = len;
+  // A choice saved on its own, before any forecast, wins over a frame that predates it.
+  if (!persist_exists(FACE_TOP_KEY)) s_show_updated = s_face.top_updated;
 }
 
 static void fill_rect(GContext *ctx, int x, int y, int w, int h, GColor color) {
@@ -1130,6 +1158,34 @@ static void format_grouped(char *out, int value) {
   }
 }
 
+// Local time of the last successful fetch, as "Upd 11:42", following the watch's 12/24-hour
+// setting. The stamp is the frame's fetched_at, which is stored with the forecast, so it is
+// still there after a restart and does not move when a fetch fails. Before any success it is
+// "--:--". The prefix is dropped only when this slot is too narrow for it.
+static void draw_updated(GContext *ctx, const Theme *t) {
+  char clock[8];
+  char text[16];
+  const char *shown = "--:--";
+  GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_14);
+  if (s_face.ok && s_face.fetched_at > 0) {
+    time_t fetched = (time_t)s_face.fetched_at;
+    struct tm when = *localtime(&fetched);
+    if (clock_is_24h_style()) {
+      snprintf(clock, sizeof(clock), "%02d:%02d", when.tm_hour, when.tm_min);
+    } else {
+      int hour = when.tm_hour % 12;
+      if (hour == 0) hour = 12;
+      snprintf(clock, sizeof(clock), "%d:%02d", hour, when.tm_min);
+    }
+    snprintf(text, sizeof(text), "Upd %s", clock);
+    shown = text_size(text, font).w <= LAYOUT.windnow.w ? text : clock;
+  }
+  GSize size = text_size(shown, font);
+  int x = LAYOUT.windnow.x + (LAYOUT.windnow.w - size.w) / 2;
+  draw_text(ctx, shown, font, GRect(x, LAYOUT.windnow.y - 1, size.w + 2, LAYOUT.windnow.h + 2),
+            GTextAlignmentLeft, t->muted);
+}
+
 // The current hour's wind: a small barb and the speed, with the unit when it fits.
 static void draw_wind_now(GContext *ctx, const Theme *t, time_t now) {
   int i = hour_now(now);
@@ -1237,6 +1293,7 @@ void face_paint(Layer *layer, GContext *ctx) {
   draw_meta(ctx, &t, &local, now);
   draw_steps(ctx, &t);
   draw_battery(ctx, &t);
-  draw_wind_now(ctx, &t, now);
+  if (s_show_updated) draw_updated(ctx, &t);
+  else draw_wind_now(ctx, &t, now);
   draw_bluetooth(ctx);
 }

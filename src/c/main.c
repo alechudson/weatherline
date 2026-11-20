@@ -37,12 +37,29 @@ static void bluetooth_handler(bool connected) {
   redraw();
 }
 
+static int tuple_number(const Tuple *tuple) {
+  if (!tuple) return -1;
+  if (tuple->type != TUPLE_UINT && tuple->type != TUPLE_INT) return -1;
+  if (tuple->length == 1) return tuple->value->uint8;
+  if (tuple->length == 2) return tuple->value->uint16;
+  return tuple->value->int32;
+}
+
 static void inbox_received(DictionaryIterator *iter, void *context) {
   (void)context;
+  bool dirty = false;
+  // The choice can arrive on its own, before any forecast, so the top line updates immediately.
+  int top = tuple_number(dict_find(iter, MESSAGE_KEY_TOPLINE));
+  if (top == 0 || top == 1) {
+    face_set_top_line(top == 1);
+    dirty = true;
+  }
   Tuple *tuple = dict_find(iter, MESSAGE_KEY_PAYLOAD);
-  if (!tuple || tuple->type != TUPLE_BYTE_ARRAY) return;
-  if (!face_set_frame(tuple->value->data, tuple->length)) return;
-  redraw();
+  if (tuple && tuple->type == TUPLE_BYTE_ARRAY &&
+      face_set_frame(tuple->value->data, tuple->length)) {
+    dirty = true;
+  }
+  if (dirty) redraw();
 }
 
 static void init(void) {

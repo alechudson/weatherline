@@ -12,6 +12,8 @@ var NO_DIR = 255;
 var WIND_FULL_KMH = 50;
 var LIGHT_FLAG = 0x10;
 var MONO_FLAG = 0x20;
+// The top line shows the last successful fetch instead of the wind speed.
+var UPDATED_FLAG = 0x40;
 
 // Both watches use the same centered stack, with the time near the bottom: steps, the current
 // wind and battery along the top, a sky lane, the chart (which carries the current
@@ -33,9 +35,11 @@ var LAYOUTS = {
     inset: 14
   },
   gabbro: {
-    steps: {x: 54, y: 36, w: 52, h: 16},
-    windnow: {x: 106, y: 36, w: 48, h: 16},
-    battery: {x: 154, y: 36, w: 52, h: 16},
+    // The center slot is wide enough for "Upd 06:10". Steps give up a little width; their
+    // text already drops the word when the number does not fit, and the battery keeps its.
+    steps: {x: 50, y: 36, w: 48, h: 16},
+    windnow: {x: 98, y: 36, w: 60, h: 16},
+    battery: {x: 158, y: 36, w: 52, h: 16},
     cloud: {x: 36, y: 56, w: 188, h: 15},
     plot: {x: 36, y: 72, w: 188, h: 74},
     wind: {x: 36, y: 147, w: 188, h: 13},
@@ -396,8 +400,10 @@ function buildFrame(forecastValue, settings, platform, nowUnix) {
   o = putU8(bytes, o, VERSION);
   o = putU8(bytes, o, platform === 'gabbro' ? 2 : 1);
   // Low bits: 1 for F, 2 for C. LIGHT_FLAG or MONO_FLAG asks the watch for that theme.
+  // UPDATED_FLAG asks for the last-fetch time on the top line instead of the wind.
   var themeFlag = settings.theme === 'light' ? LIGHT_FLAG : (settings.theme === 'mono' ? MONO_FLAG : 0);
-  o = putU8(bytes, o, (unit === 'C' ? 2 : 1) | themeFlag);
+  var topFlag = settings.topLine === 'updated' ? UPDATED_FLAG : 0;
+  o = putU8(bytes, o, (unit === 'C' ? 2 : 1) | themeFlag | topFlag);
   o = putU8(bytes, o, n);
   o = putU32(bytes, o, forecastValue.fetchedAt || 0);
   o = putU32(bytes, o, selected[0].time);
@@ -488,6 +494,7 @@ function unpackFrame(bytes) {
     platform: bytes[1] === 2 ? 'gabbro' : 'emery',
     unit: (unitByte & 15) === 2 ? 'C' : 'F',
     theme: unitByte & LIGHT_FLAG ? 'light' : (unitByte & MONO_FLAG ? 'mono' : 'dark'),
+    topLine: unitByte & UPDATED_FLAG ? 'updated' : 'wind',
     hourCount: hourCount,
     fetchedAt: readU32(bytes, 4),
     windowStart: readU32(bytes, 8),

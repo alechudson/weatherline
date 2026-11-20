@@ -29,9 +29,9 @@ typedef struct {
 
 #if defined(PBL_ROUND)
 static const Layout LAYOUT = {
-  .steps = {54, 36, 52, 16},
-  .windnow = {106, 36, 48, 16},
-  .battery = {154, 36, 52, 16},
+  .steps = {50, 36, 48, 16},
+  .windnow = {98, 36, 60, 16},
+  .battery = {158, 36, 52, 16},
   .time = {60, 197, 140, 34},
   .temp = {0, 0, 0, 0},
   .date = {0, 0, 0, 0},
