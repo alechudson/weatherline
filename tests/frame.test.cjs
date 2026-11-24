@@ -292,10 +292,10 @@ function dayCurve(i) {
   return 10 + 8 * Math.sin((i - 9) * Math.PI / 12);
 }
 
-test('a change from yesterday under the threshold leaves the fill empty', function() {
+test('a change from yesterday under the threshold leaves no band', function() {
   var unpacked = twoDayFrame(dayCurve, function(i) { return dayCurve(i) - 1; });
   unpacked.hours.forEach(function(hour) {
-    assert.equal(hour.prevY, 127);
+    assert.equal(hour.prevY, hour.tempY);
   });
 });
 
@@ -315,19 +315,51 @@ test('a sustained change past the threshold fills every hour on the right side o
 test('a single warm hour does not read as a front', function() {
   var unpacked = twoDayFrame(function(i) { return i === 14 ? dayCurve(i) + 5 : dayCurve(i); }, dayCurve);
   unpacked.hours.forEach(function(hour) {
-    assert.equal(hour.prevY, 127);
+    assert.equal(hour.prevY, hour.tempY);
   });
 });
 
-test('an hour that runs against the change around it is not filled', function() {
+test('an hour that runs against the change around it does not break the band', function() {
   var unpacked = twoDayFrame(function(i) { return i === 14 ? dayCurve(i) - 6 : dayCurve(i); },
     function(i) { return dayCurve(i) - 4; });
-  assert.equal(unpacked.hours[14].prevY, 127);
-  assert.notEqual(unpacked.hours[13].prevY, 127);
-  assert.notEqual(unpacked.hours[15].prevY, 127);
+  [13, 14, 15].forEach(function(i) {
+    assert.ok(unpacked.hours[i].prevY > unpacked.hours[i].tempY, 'hour ' + i + ' stays in the warmer band');
+  });
 });
 
-test('yesterday does not widen the scale, and its fill stays within the line rows', function() {
+test('the band thickens with the change past the threshold and stops at the cap', function() {
+  function thickness(change) {
+    var unpacked = twoDayFrame(dayCurve, function(i) { return dayCurve(i) - change; });
+    return unpacked.hours[9].prevY - unpacked.hours[9].tempY;
+  }
+  assert.equal(thickness(1), 0, 'a degree is not a front');
+  var fading = thickness(1.5);
+  var full = thickness(2.5);
+  assert.ok(fading >= 1 && fading <= 3, 'a change still fading in is a sliver: ' + fading);
+  assert.ok(full > fading + 3, 'a clear change is a clear band: ' + full);
+  assert.ok(thickness(3.5) > full, 'a bigger change is a thicker band');
+  assert.equal(thickness(20), 12, 'a huge change stops at the cap');
+});
+
+test('a front fades in hour by hour instead of switching on', function() {
+  var unpacked = twoDayFrame(function(i) {
+    return dayCurve(i) + Math.max(0, Math.min(8, i - 6));
+  }, dayCurve);
+  var last = 0;
+  var steps = 0;
+  var i;
+  for (i = 0; i < 24; i++) {
+    var gap = unpacked.hours[i].prevY - unpacked.hours[i].tempY;
+    assert.ok(gap >= last || gap >= 12 || unpacked.hours[i].prevY === frame.layouts.emery.plot.h - 1 - frame.layouts.emery.inset,
+      'the band never thins while the change keeps growing (hour ' + i + ')');
+    assert.ok(gap - last <= 6, 'the band grows over hours, not all at once (hour ' + i + ')');
+    if (gap > last) steps += 1;
+    last = gap;
+  }
+  assert.ok(steps >= 3, 'the band grows over several hours');
+});
+
+test('yesterday does not widen the scale, and the band stays within the line rows', function() {
   var alone = twoDayFrame(dayCurve, dayCurve);
   var after = twoDayFrame(dayCurve, function(i) { return dayCurve(i) + 25; });
   var inset = frame.layouts.emery.inset;

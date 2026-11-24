@@ -162,31 +162,38 @@ function plotTempC(hour, useFeels) {
   return hour.tempC;
 }
 
-// The warmer-or-colder fill marks only a sustained change from the day before: the
-// difference from the same hour yesterday is averaged over FRONT_WINDOW_H hours either side,
-// so a single cloudy or sunny afternoon does not read as a front, and the average must reach
-// FRONT_MIN_C. The threshold is in degrees, so its meaning does not change with the chart's
-// scale.
+// The warmer-or-colder band marks a sustained change from the day before. The difference
+// from the same hour yesterday is averaged over FRONT_WINDOW_H hours either side, so a single
+// cloudy or sunny afternoon does not read as a front. The band is FRONT_PX_PER_C pixels per
+// degree of that average, up to FRONT_MAX_PX, and fades in between FRONT_START_C and
+// FRONT_FULL_C, so a front swells in and out with the change instead of switching on, and a
+// given thickness means the same change whatever the chart's scale.
 var FRONT_WINDOW_H = 3;
-var FRONT_MIN_C = 1.5;
+var FRONT_START_C = 1;
+var FRONT_FULL_C = 2;
+var FRONT_PX_PER_C = 3;
+var FRONT_MAX_PX = 12;
 
-// The row of yesterday's temperature for the fill, or NO_ROW where nothing is shaded: no
-// yesterday, no sustained change, or an hour that runs against the change around it. The row
-// is held to the rows the line itself can reach, so the fill never runs into the day labels.
-function frontRow(todayC, before, sign, useFeels, unit, lo, hi, plotH, inset) {
-  if (!before || !sign) return NO_ROW;
-  var beforeC = plotTempC(before, useFeels);
-  if (!isNum(todayC) || !isNum(beforeC)) return NO_ROW;
-  if ((todayC - beforeC) * sign <= 0) return NO_ROW;
-  var t = tenths(beforeC, unit);
-  if (t > hi) t = hi;
-  if (t < lo) t = lo;
-  return tempY(t, lo, hi, plotH, inset);
+// The edge of the band for an hour: below the line when warmer than yesterday, above it when
+// colder, and on the line itself where there is no sustained change, so the watch tapers the
+// band to a point there. The edge is held to the rows the line itself can reach, so the band
+// never runs into the day labels. NO_ROW when yesterday is unknown.
+function frontRow(lineY, bandC, plotH, inset) {
+  if (!isNum(bandC)) return NO_ROW;
+  var size = Math.abs(bandC);
+  var fade = Math.max(0, Math.min(1, (size - FRONT_START_C) / (FRONT_FULL_C - FRONT_START_C)));
+  var px = Math.min(FRONT_MAX_PX, Math.round(size * FRONT_PX_PER_C * fade));
+  var y = bandC > 0 ? lineY + px : lineY - px;
+  var top = Math.min(inset, lineY);
+  var bottom = Math.max(plotH - 1 - inset, lineY);
+  if (y < top) y = top;
+  if (y > bottom) y = bottom;
+  return y;
 }
 
-// For each hour in `ordered`, +1 when the smoothed change from yesterday is warmer, -1 when
-// colder, and 0 when too small or unknown.
-function frontSigns(ordered, byTime, useFeels) {
+// For each hour in `ordered` with a known yesterday, the smoothed change from yesterday in
+// degrees C: positive when warmer, negative when colder.
+function frontBands(ordered, byTime, useFeels) {
   var deltas = {};
   var i;
   for (i = 0; i < ordered.length; i++) {
@@ -197,7 +204,7 @@ function frontSigns(ordered, byTime, useFeels) {
     var b = plotTempC(before, useFeels);
     if (isNum(a) && isNum(b)) deltas[hour.time] = a - b;
   }
-  var signs = {};
+  var bands = {};
   for (i = 0; i < ordered.length; i++) {
     var t = ordered[i].time;
     if (!Object.prototype.hasOwnProperty.call(deltas, t)) continue;
@@ -211,10 +218,9 @@ function frontSigns(ordered, byTime, useFeels) {
         count += 1;
       }
     }
-    var mean = sum / count;
-    signs[t] = mean >= FRONT_MIN_C ? 1 : mean <= -FRONT_MIN_C ? -1 : 0;
+    bands[t] = sum / count;
   }
-  return signs;
+  return bands;
 }
 
 function collectSunEvents(days, nowUnix) {
@@ -438,14 +444,12 @@ function buildFrame(forecastValue, settings, platform, nowUnix) {
   if (!selected.length) return null;
   if (selected.length > 255) return null;
 
-  // Yesterday at the same hour, for the warmer-or-colder fill. The fill uses the line's scale
-  // but does not widen it; where yesterday falls outside, the fill stops at the line's range.
+  // The warmer-or-colder band beside the line, from the change since the same hour yesterday.
+  // It does not touch the chart's scale.
   var byTime = {};
   var i;
   for (i = 0; i < ordered.length; i++) byTime[ordered[i].time] = ordered[i];
-  var prev = [];
-  for (i = 0; i < selected.length; i++) prev.push(byTime[selected[i].time - 86400] || null);
-  var signs = frontSigns(ordered, byTime, useFeels);
+  var bands = frontBands(ordered, byTime, useFeels);
 
   var lo = tenths(plotTempC(selected[0], useFeels), unit);
   var hi = lo;
@@ -471,10 +475,10 @@ function buildFrame(forecastValue, settings, platform, nowUnix) {
   for (i = 0; i < n; i++) {
     var hour = selected[i];
     var hTemp = plotTempC(hour, useFeels);
+    var lineY = tempY(tenths(hTemp, unit), lo, hi, plotH, layout.inset || 0);
     hourRecs.push({
-      tempY: tempY(tenths(hTemp, unit), lo, hi, plotH, layout.inset || 0),
-      prevY: frontRow(hTemp, prev[i], signs[hour.time], useFeels, unit, lo, hi, plotH,
-        layout.inset || 0),
+      tempY: lineY,
+      prevY: frontRow(lineY, bands[hour.time], plotH, layout.inset || 0),
       night: hour.isDay === 1 ? 0 : 1,
       rainH: barPx(hour.rainMm, 4, 0.1, laneH),
       snowH: barPx(hour.snowCm, 1, 0.05, laneH),
