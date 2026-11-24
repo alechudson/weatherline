@@ -48,11 +48,12 @@
 #define TIME_CLEAR_H (LAYOUT.time.h + 2)
 #else
 #define FACE_PLATFORM 1
-// Leaves x < 22 untouched so the Bluetooth rune on the left edge never overlaps the time clear.
+// Leaves x < 22 untouched so the Bluetooth rune on the left edge never overlaps the time clear,
+// and clears through y = 205 (above LAYOUT.meta.y = 206) so FONT_TIME_72's bottom row is erased.
 #define TIME_CLEAR_X 22
 #define TIME_CLEAR_Y (LAYOUT.time.y - 1)
 #define TIME_CLEAR_W (200 - TIME_CLEAR_X)
-#define TIME_CLEAR_H (LAYOUT.time.h + 2)
+#define TIME_CLEAR_H (LAYOUT.time.h + 4)
 #endif
 
 // Chart bounding box including the 5px radius of the now ring at the left/right edges
@@ -1880,6 +1881,9 @@ void face_paint(Layer *layer, GContext *ctx) {
   s_dirty = 0;
   time_t now = time(NULL);
   struct tm local = *localtime(&now);
+  bool h24 = clock_is_24h_style();
+  bool style_changed = h24 != s_last_24h;
+  if (style_changed) s_chart_cache_valid = false;
 
   if (qv) {
     s_quick_view = true;
@@ -1887,12 +1891,13 @@ void face_paint(Layer *layer, GContext *ctx) {
     s_last_hour_now = hour_now(now);
     s_last_feels_now = feels_now(now);
     s_last_sun_idx = next_sun_index(now);
-    s_last_24h = clock_is_24h_style();
+    s_last_24h = h24;
     return;
   }
 
-  // If PebbleOS triggered a repaint directly, Quick View just closed, or all was marked dirty.
-  bool full = (dirty == 0 || dirty == FACE_DIRTY_ALL || s_quick_view);
+  // If PebbleOS triggered a repaint directly, Quick View just closed, 12h/24h changed, or all
+  // was marked dirty.
+  bool full = (dirty == 0 || dirty == FACE_DIRTY_ALL || s_quick_view || style_changed);
   s_quick_view = false;
   if (full) {
     dirty = FACE_DIRTY_ALL;
@@ -1946,5 +1951,5 @@ void face_paint(Layer *layer, GContext *ctx) {
     if (!full) fill_rect(ctx, LAYOUT.bt_x - h, LAYOUT.bt_y - h, 2 * h + 1, 2 * h + 1, t.bg);
     draw_bluetooth_at(ctx, LAYOUT.bt_x, LAYOUT.bt_y);
   }
-  s_last_24h = clock_is_24h_style();
+  s_last_24h = h24;
 }
