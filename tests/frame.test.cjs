@@ -261,3 +261,82 @@ test('the top row slots ride in header byte 41 and do not restamp the fetch time
   assert.equal(wind.topLeft, 'steps');
   assert.equal(wind.fetchedAt, NOW - 3600);
 });
+
+// Yesterday and today, hour by hour, with today's temperatures from `today(i)` and yesterday's
+// from `yesterday(i)`, for the warmer-or-colder fill.
+function twoDayFrame(today, yesterday) {
+  var offset = -21600;
+  var midnight = Math.floor((NOW + offset) / 86400) * 86400 - offset;
+  var hours = [];
+  var i;
+  for (i = 0; i < 24; i++) {
+    hours.push({time: midnight - 86400 + i * 3600, tempC: yesterday(i), rainMm: 0, snowCm: 0, cloud: 0, isDay: 1});
+  }
+  for (i = 0; i < 24; i++) {
+    hours.push({time: midnight + i * 3600, tempC: today(i), rainMm: 0, snowCm: 0, cloud: 0, isDay: 1});
+  }
+  var unpacked = frame.unpackFrame(frame.buildFrame({
+    fetchedAt: NOW,
+    utcOffsetSeconds: offset,
+    currentC: null,
+    place: '',
+    days: [],
+    hours: hours
+  }, settings(1, 'C'), 'emery', NOW));
+  assert.ok(unpacked);
+  assert.equal(unpacked.hours.length, 24);
+  return unpacked;
+}
+
+function dayCurve(i) {
+  return 10 + 8 * Math.sin((i - 9) * Math.PI / 12);
+}
+
+test('a change from yesterday under the threshold leaves the fill empty', function() {
+  var unpacked = twoDayFrame(dayCurve, function(i) { return dayCurve(i) - 1; });
+  unpacked.hours.forEach(function(hour) {
+    assert.equal(hour.prevY, 127);
+  });
+});
+
+test('a sustained change past the threshold fills every hour on the right side of the line', function() {
+  var warmer = twoDayFrame(dayCurve, function(i) { return dayCurve(i) - 3; });
+  warmer.hours.forEach(function(hour) {
+    assert.notEqual(hour.prevY, 127);
+    assert.ok(hour.prevY >= hour.tempY, 'yesterday sits below the line when today is warmer');
+  });
+  var colder = twoDayFrame(dayCurve, function(i) { return dayCurve(i) + 3; });
+  colder.hours.forEach(function(hour) {
+    assert.notEqual(hour.prevY, 127);
+    assert.ok(hour.prevY <= hour.tempY, 'yesterday sits above the line when today is colder');
+  });
+});
+
+test('a single warm hour does not read as a front', function() {
+  var unpacked = twoDayFrame(function(i) { return i === 14 ? dayCurve(i) + 5 : dayCurve(i); }, dayCurve);
+  unpacked.hours.forEach(function(hour) {
+    assert.equal(hour.prevY, 127);
+  });
+});
+
+test('an hour that runs against the change around it is not filled', function() {
+  var unpacked = twoDayFrame(function(i) { return i === 14 ? dayCurve(i) - 6 : dayCurve(i); },
+    function(i) { return dayCurve(i) - 4; });
+  assert.equal(unpacked.hours[14].prevY, 127);
+  assert.notEqual(unpacked.hours[13].prevY, 127);
+  assert.notEqual(unpacked.hours[15].prevY, 127);
+});
+
+test('yesterday does not widen the scale, and its fill stays within the line rows', function() {
+  var alone = twoDayFrame(dayCurve, dayCurve);
+  var after = twoDayFrame(dayCurve, function(i) { return dayCurve(i) + 25; });
+  var inset = frame.layouts.emery.inset;
+  var plotH = frame.layouts.emery.plot.h;
+  var i;
+  for (i = 0; i < 24; i++) {
+    assert.equal(after.hours[i].tempY, alone.hours[i].tempY);
+    assert.ok(after.hours[i].prevY >= inset);
+    assert.ok(after.hours[i].prevY <= plotH - 1 - inset);
+    assert.ok(after.hours[i].prevY < after.hours[i].tempY || after.hours[i].tempY === inset);
+  }
+});
