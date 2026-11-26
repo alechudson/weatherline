@@ -1,0 +1,8 @@
+bin/
+*.prg
+*.iq
+*.prg.debug.xml
+*.mir
+developer_key.der
+developer_key.pem
+internal-mir/

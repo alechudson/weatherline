@@ -1,0 +1,12 @@
+<strings xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://developer.garmin.com/downloads/connect-iq/resources.xsd">
+    <string id="AppName">Weatherline</string>
+    <string id="SpanTitle">Hours on the chart</string>
+    <string id="Span12">12 hours</string>
+    <string id="Span24">24 hours</string>
+    <string id="UnitsTitle">Temperature unit</string>
+    <string id="UnitsWatch">Same as watch</string>
+    <string id="UnitsF">Fahrenheit</string>
+    <string id="UnitsC">Celsius</string>
+    <string id="LightTitle">Light background</string>
+    <string id="BtTitle">Vibrate if the phone disconnects</string>
+</strings>

@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<iq:manifest version="3" xmlns:iq="http://www.garmin.com/xml/connectiq">
+    <iq:application
+        id="4E460B4C06D742EEBFDA71EB5FF54570"
+        type="watchface"
+        name="@Strings.AppName"
+        entry="WeatherlineApp"
+        launcherIcon="@Drawables.LauncherIcon"
+        minApiLevel="5.1.0">
+        <iq:products>
+            <!-- One id covers Instinct 3 Solar 45mm and 50mm. -->
+            <iq:product id="instinct3solar45mm"/>
+        </iq:products>
+        <iq:permissions>
+            <iq:uses-permission id="Positioning"/>
+        </iq:permissions>
+        <iq:languages>
+            <iq:language>eng</iq:language>
+        </iq:languages>
+        <iq:barrels/>
+    </iq:application>
+</iq:manifest>
