@@ -1,6 +1,0 @@
-<properties xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://developer.garmin.com/downloads/connect-iq/resources.xsd">
-    <property id="span" type="number">24</property>
-    <property id="units" type="number">0</property>
-    <property id="light" type="boolean">false</property>
-    <property id="btAlert" type="boolean">false</property>
-</properties>
