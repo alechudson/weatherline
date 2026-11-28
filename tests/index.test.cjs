@@ -261,6 +261,41 @@ test('a failed place lookup is retried on the next refresh without a new downloa
   assert.equal(cache.place, 'Austin');
 });
 
+test('a place name clipped by an older version is looked up again without a new download', async function(t) {
+  var realNow = Date.now;
+  Date.now = function() { return NOW_MS; };
+  var first = boot({watchInfo: {platform: 'emery'}});
+  first.listeners.ready();
+  await settle();
+  await settle();
+  answer(first.requests[0], forecastBody());
+  answer(first.requests[1], JSON.stringify({city: 'Austin'}));
+  first.restore();
+  var cache = JSON.parse(first.storage.getItem('weatherline.forecast'));
+  assert.equal(cache.placeFull, true);
+  // As an older version left it: clipped, with no marker.
+  cache.place = 'Township of Cli';
+  delete cache.placeFull;
+  first.storage.setItem('weatherline.forecast', JSON.stringify(cache));
+  first.storage.removeItem('weatherline.checkedAt');
+
+  Date.now = function() { return NOW_MS + 10 * 60000; };
+  var app = boot({watchInfo: {platform: 'emery'}, storage: first.storage});
+  t.after(function() {
+    app.restore();
+    Date.now = realNow;
+  });
+  app.listeners.ready();
+  await settle();
+  await settle();
+  assert.equal(app.requests.length, 1, 'only the place is requested');
+  assert.ok(app.requests[0].url.indexOf('api-bdc.io/data/reverse-geocode-client') >= 0);
+  answer(app.requests[0], JSON.stringify({city: 'Township of Clinton'}));
+  cache = JSON.parse(app.storage.getItem('weatherline.forecast'));
+  assert.equal(cache.place, 'Township of Clinton');
+  assert.equal(cache.placeFull, true);
+});
+
 function readU32(bytes, offset) {
   return (bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24)) >>> 0;
 }

@@ -208,6 +208,7 @@ function requestPlace(lat, lon, gen) {
     var current = forecast.readCache(localStorage);
     if (!current || !locate.samePlace(current, {lat: lat, lon: lon})) return;
     current.place = name;
+    current.placeFull = true;
     forecast.writeCache(localStorage, current);
     sendForecast(current);
   };
@@ -236,8 +237,9 @@ function fetchForecast(fix, gen) {
     var previous = forecast.readCache(localStorage);
     var lat = fix.lat;
     var lon = fix.lon;
-    var place = fix.place ? forecast.clipPlace(fix.place) : '';
-    if (!place && previous && locate.samePlace(previous, fix)) {
+    var place = forecast.storedPlace(fix.place);
+    // A name stored before places were kept whole was clipped, so it is looked up again.
+    if (!place && previous && previous.placeFull && locate.samePlace(previous, fix)) {
       lat = previous.lat;
       lon = previous.lon;
       place = previous.place || '';
@@ -251,7 +253,8 @@ function fetchForecast(fix, gen) {
       days: parsed.days,
       lat: lat,
       lon: lon,
-      place: place
+      place: place,
+      placeFull: true
     };
     forecast.writeCache(localStorage, stored);
     sendForecast(stored);
@@ -340,8 +343,9 @@ function cycle(sendFirst) {
     if (skipFetch(cached, fix, st)) {
       // The frame can still change without a fetch, at midnight say.
       sendForecast(cached);
-      // A place lookup that failed earlier is retried without downloading the forecast again.
-      if (!cached.place) requestPlace(cached.lat, cached.lon, gen);
+      // A place lookup that failed earlier, or a name stored clipped by an older version, is
+      // looked up again without downloading the forecast again.
+      if (!cached.place || !cached.placeFull) requestPlace(cached.lat, cached.lon, gen);
       finish(gen, true);
       return;
     }

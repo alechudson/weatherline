@@ -18,8 +18,24 @@ function utf8Len(cp) {
   return 4;
 }
 
+// Places are stored as named and shortened only for the watch, so a better fit later
+// never needs a new lookup.
+var MAX_STORED_PLACE = 64;
+
+// "Township of Clinton" reads as "Clinton" on a 15-byte line.
+var PLACE_PREFIX = /^(?:charter\s+)?(?:township|city|town|village|borough|municipality)\s+of\s+/i;
+
+function storedPlace(str) {
+  var s = typeof str === 'string' ? str.replace(/\s+/g, ' ').trim() : '';
+  return s.length > MAX_STORED_PLACE ? s.substr(0, MAX_STORED_PLACE) : s;
+}
+
+// Fits a place into 15 UTF-8 bytes for the watch, dropping an administrative prefix and
+// cutting at a word break when one is available rather than mid-word.
 function clipPlace(str) {
-  var s = typeof str === 'string' ? str : '';
+  var s = storedPlace(str);
+  var bare = s.replace(PLACE_PREFIX, '');
+  if (bare) s = bare;
   var out = '';
   var used = 0;
   var i = 0;
@@ -40,7 +56,11 @@ function clipPlace(str) {
     used += need;
     i += step;
   }
-  return out;
+  if (i < s.length && s.charAt(i) !== ' ') {
+    var cut = out.lastIndexOf(' ');
+    if (cut > 0) out = out.substr(0, cut);
+  }
+  return out.replace(/[\s,\-\u2013\u2014]+$/, '');
 }
 
 function cloudByte(value) {
@@ -183,7 +203,7 @@ function geocodeFromBody(text) {
   return {
     lat: first.latitude,
     lon: first.longitude,
-    place: clipPlace(typeof first.name === 'string' ? first.name : '')
+    place: storedPlace(first.name)
   };
 }
 
@@ -213,7 +233,8 @@ function placeFromBody(text) {
   var fields = [body.city, body.locality, body.principalSubdivision];
   var i;
   for (i = 0; i < fields.length; i++) {
-    if (typeof fields[i] === 'string' && fields[i].length) return clipPlace(fields[i]);
+    var name = storedPlace(fields[i]);
+    if (name) return name;
   }
   return '';
 }
@@ -275,6 +296,7 @@ function writeCache(storage, value) {
 
 module.exports = {
   clipPlace: clipPlace,
+  storedPlace: storedPlace,
   parseForecast: parseForecast,
   forecastUrl: forecastUrl,
   geocodeUrl: geocodeUrl,

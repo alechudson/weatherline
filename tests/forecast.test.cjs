@@ -119,6 +119,20 @@ test('place uses the first non-empty name and clips to 15 UTF-8 bytes', function
   assert.equal(forecast.clipPlace('\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9'), '\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9');
 });
 
+test('place names are stored whole and shortened only for the watch', function() {
+  var long = 'Township of Clinton Heights Lakeside';
+  assert.equal(forecast.placeFromBody(JSON.stringify({city: long})), long);
+  assert.equal(forecast.placeFromBody(JSON.stringify({city: '  ', locality: 'Keep'})), 'Keep');
+  assert.equal(forecast.clipPlace('Township of Clinton'), 'Clinton');
+  assert.equal(forecast.clipPlace('Charter Township of Canton'), 'Canton');
+  assert.equal(forecast.clipPlace('City of Ann Arbor'), 'Ann Arbor');
+  assert.equal(forecast.clipPlace('Village of'), 'Village of', 'a prefix alone is kept');
+  assert.equal(forecast.clipPlace('Rancho Santa Margarita'), 'Rancho Santa');
+  assert.equal(forecast.clipPlace('Clinton Township'), 'Clinton', 'cut at a word break');
+  assert.equal(forecast.clipPlace('Winston-Salem, NC'), 'Winston-Salem');
+  assert.equal(forecast.clipPlace('Llanfairpwllgwyngyll'), 'Llanfairpwllgwy', 'one long word is cut');
+});
+
 test('readCache rejects a shape that is not a forecast and round-trips a real one', function() {
   var storage = memory();
   assert.equal(forecast.readCache(storage), null);
