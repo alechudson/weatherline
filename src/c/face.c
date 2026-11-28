@@ -909,7 +909,36 @@ static int now_px(time_t now) {
   return (int)(((now64 - (int64_t)s_face.window_start) * LAYOUT.plot.w) / span);
 }
 
-static void layout_day_label(int i, DayLabel *out) {
+// Whether day `i`'s name, cut to `name_len` letters, fits beside its high in the column.
+static bool day_name_fits(int i, int name_len) {
+  FaceDay day = s_face.days[i];
+  if (day.wday > 6) return true;
+  GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_14);
+  GFont bold = fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD);
+  char name[6];
+  char max[8];
+  snprintf(name, sizeof(name), "%.*s", name_len, WEEKDAYS[day.wday]);
+  snprintf(max, sizeof(max), "%d", day.max_deg);
+  return text_size(name, font).w + 2 + text_size(max, bold).w <= day.span - 3;
+}
+
+// With several days on screen every day is named alike: in full when all of them fit, else
+// cut to two letters or one, else not at all. Dropping only the names that do not fit would
+// leave a high beside the day before's label, where it reads as that day's.
+static int day_name_len(void) {
+  if (s_face.day_count <= 1) return 0;
+  int len;
+  for (len = 3; len > 0; len--) {
+    int i;
+    for (i = 0; i < s_face.day_count; i++) {
+      if (!day_name_fits(i, len)) break;
+    }
+    if (i == s_face.day_count) return len;
+  }
+  return 0;
+}
+
+static void layout_day_label(int i, int name_len, DayLabel *out) {
   GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_14);
   GFont bold = fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD);
   FaceDay day = s_face.days[i];
@@ -920,12 +949,10 @@ static void layout_day_label(int i, DayLabel *out) {
   snprintf(out->min, sizeof(out->min), "%d", day.min_deg);
   out->max_size = text_size(out->max, bold);
   out->min_size = text_size(out->min, bold);
-  // With several days on screen, name each one in a quieter color; drop the name if the
-  // column is too narrow for it.
-  if (s_face.day_count > 1 && day.wday <= 6) {
-    snprintf(out->name, sizeof(out->name), "%s", WEEKDAYS[day.wday]);
+  // Names are in a quieter color than the highs.
+  if (name_len > 0 && day.wday <= 6) {
+    snprintf(out->name, sizeof(out->name), "%.*s", name_len, WEEKDAYS[day.wday]);
     out->name_size = text_size(out->name, font);
-    if (out->name_size.w + gap + out->max_size.w > span) out->name_size = GSizeZero;
   }
   out->x = LAYOUT.plot.x + day.x + 3;
   out->max_x = out->name_size.w > 0 ? out->x + out->name_size.w + gap : out->x;
@@ -940,8 +967,9 @@ static void prepare_frame(void) {
   for (i = 0; i < n; i++) {
     s_col_mid[i] = (int16_t)column_mid(i, n, w);
   }
+  int name_len = day_name_len();
   for (i = 0; i < s_face.day_count; i++) {
-    layout_day_label(i, &s_day_labels[i]);
+    layout_day_label(i, name_len, &s_day_labels[i]);
   }
 }
 
